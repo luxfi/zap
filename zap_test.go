@@ -188,6 +188,98 @@ func TestNestedObject(t *testing.T) {
 	}
 }
 
+func TestTextRoundTrip(t *testing.T) {
+	b := NewBuilder(256)
+
+	// Build object with text fields using SetText
+	ob := b.StartObject(24) // id(uint32=4) + name(text=8) + age(int32=4) => 16, aligned to 24
+	ob.SetUint32(0, 42)
+	ob.SetText(4, "Alice")
+	ob.SetInt32(12, 30)
+	ob.FinishAsRoot()
+
+	data := b.Finish()
+	msg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	root := msg.Root()
+
+	if got := root.Uint32(0); got != 42 {
+		t.Errorf("Uint32(0) = %d, want 42", got)
+	}
+	if got := root.Text(4); got != "Alice" {
+		t.Errorf("Text(4) = %q, want %q", got, "Alice")
+	}
+	if got := root.Int32(12); got != 30 {
+		t.Errorf("Int32(12) = %d, want 30", got)
+	}
+}
+
+func TestMultipleTextFields(t *testing.T) {
+	b := NewBuilder(256)
+
+	ob := b.StartObject(24) // 3 text fields * 8 bytes = 24
+	ob.SetText(0, "hello")
+	ob.SetText(8, "world")
+	ob.SetText(16, "!")
+	ob.FinishAsRoot()
+
+	data := b.Finish()
+	msg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	root := msg.Root()
+
+	if got := root.Text(0); got != "hello" {
+		t.Errorf("Text(0) = %q, want %q", got, "hello")
+	}
+	if got := root.Text(8); got != "world" {
+		t.Errorf("Text(8) = %q, want %q", got, "world")
+	}
+	if got := root.Text(16); got != "!" {
+		t.Errorf("Text(16) = %q, want %q", got, "!")
+	}
+}
+
+func TestNestedObjectWithText(t *testing.T) {
+	b := NewBuilder(512)
+
+	// Build inner object with text
+	inner := b.StartObject(16) // text(8) + uint32(4) = 12, aligned to 16
+	inner.SetText(0, "inner-text")
+	inner.SetUint32(8, 999)
+	innerOffset := inner.Finish()
+
+	// Build outer object with text + nested
+	outer := b.StartObject(16) // text(8) + object(4) = 12, aligned to 16
+	outer.SetText(0, "outer-text")
+	outer.SetObject(8, innerOffset)
+	outer.FinishAsRoot()
+
+	data := b.Finish()
+	msg, _ := Parse(data)
+	root := msg.Root()
+
+	if got := root.Text(0); got != "outer-text" {
+		t.Errorf("outer.Text(0) = %q, want %q", got, "outer-text")
+	}
+
+	innerObj := root.Object(8)
+	if innerObj.IsNull() {
+		t.Fatal("inner object is null")
+	}
+	if got := innerObj.Text(0); got != "inner-text" {
+		t.Errorf("inner.Text(0) = %q, want %q", got, "inner-text")
+	}
+	if got := innerObj.Uint32(8); got != 999 {
+		t.Errorf("inner.Uint32(8) = %d, want 999", got)
+	}
+}
+
 func TestInvalidMagic(t *testing.T) {
 	data := []byte("INVALID_MAGIC___")
 	_, err := Parse(data)

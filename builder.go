@@ -85,7 +85,8 @@ type ObjectBuilder struct {
 
 type offsetEntry struct {
 	fieldOffset int
-	targetPos   int
+	targetPos   int    // positive = known position, negative = deferred write
+	data        []byte // actual bytes to write (deferred text/bytes)
 }
 
 // StartObject starts building an object with the given data size.
@@ -167,6 +168,7 @@ func (ob *ObjectBuilder) SetText(fieldOffset int, v string) {
 }
 
 // SetBytes sets a bytes field.
+// The data is written after the object's fixed section during Finish().
 func (ob *ObjectBuilder) SetBytes(fieldOffset int, v []byte) {
 	ob.ensureField(fieldOffset + 8) // offset + length
 
@@ -177,17 +179,14 @@ func (ob *ObjectBuilder) SetBytes(fieldOffset int, v []byte) {
 		return
 	}
 
-	// Record that we need to write the data and patch the offset
+	// Store the data and length; the relative offset is patched in Finish()
 	ob.offsets = append(ob.offsets, offsetEntry{
 		fieldOffset: fieldOffset,
-		targetPos:   -len(v), // Negative means "write this many bytes"
+		data:        append([]byte(nil), v...), // copy the data
 	})
 
-	// Store the bytes to write later
+	// Write the length now
 	binary.LittleEndian.PutUint32(ob.b.buf[ob.startPos+fieldOffset+4:], uint32(len(v)))
-
-	// We'll store the actual data when finishing
-	ob.b.grow(len(v) + Alignment)
 }
 
 // SetObject sets a nested object field (by offset).
@@ -232,9 +231,29 @@ func (ob *ObjectBuilder) ensureField(endOffset int) {
 }
 
 // Finish finalizes the object and returns its offset.
+// Writes deferred text/bytes data after the object's fixed section
+// and patches relative offsets.
 func (ob *ObjectBuilder) Finish() int {
-	// Ensure minimum size
+	// Ensure minimum size for fixed fields
 	ob.ensureField(ob.dataSize)
+
+	// Write deferred text/bytes data and patch relative offsets
+	for _, entry := range ob.offsets {
+		if entry.data == nil {
+			continue
+		}
+		// Write the data at current position (after fixed section)
+		dataPos := ob.b.pos
+		ob.b.grow(len(entry.data))
+		copy(ob.b.buf[ob.b.pos:ob.b.pos+len(entry.data)], entry.data)
+		ob.b.pos += len(entry.data)
+
+		// Patch the relative offset: relOffset = dataPos - fieldAbsPos
+		fieldAbsPos := ob.startPos + entry.fieldOffset
+		relOffset := int32(dataPos - fieldAbsPos)
+		binary.LittleEndian.PutUint32(ob.b.buf[fieldAbsPos:], uint32(relOffset))
+	}
+
 	return ob.startPos
 }
 
