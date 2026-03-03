@@ -1,6 +1,6 @@
 module github.com/luxfi/zap
 
-go 1.23.0
+go 1.26
 
 require github.com/luxfi/mdns v0.1.0
 
