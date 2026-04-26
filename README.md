@@ -270,7 +270,7 @@ Auto-discover peers via mDNS and communicate with ZAP:
 node := zap.NewNode(zap.NodeConfig{
     NodeID:      "node-1",
     ServiceType: "_luxd._tcp",
-    Port:        9651,
+    Port:        zap.DefaultPort, // 9999 — canonical ZAP port
 })
 
 // Handle incoming messages
