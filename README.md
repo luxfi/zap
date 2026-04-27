@@ -13,6 +13,11 @@
 import "github.com/luxfi/zap"
 ```
 
+```python
+# Python — pure stdlib, no deps. See python/README.md
+from zap_py import Builder, parse
+```
+
 ZAP is a high-performance binary protocol for AI agent communication and inter-process messaging. It provides **17x faster serialization** and **11x less memory** than MCP JSON-RPC, while maintaining full compatibility with existing MCP tools.
 
 ## Features
