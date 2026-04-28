@@ -140,7 +140,41 @@ ZAP_GO_EVM_FIXTURE=/tmp/zap_evm_fixture.bin python -m pytest python/tests/test_e
 | Null object / null list | ✓ | ✓ |
 | EVM `Address` (20), `Hash` (32), `Signature` (65), `Bloom` (256) | ✓ | ✓ |
 | Lists of addresses / hashes (typed access) | ✓ | ✓ (via `add_bytes`) |
+| Schema DSL — `StructBuilder`, `Field`/`Struct`/`Schema` registry | ✓ | — |
+| `TRANSACTION_SCHEMA`, `BLOCK_HEADER_SCHEMA`, `LOG_SCHEMA` (parity-tested vs Go) | ✓ | — |
 
-Not yet ported: MCP bridge, mDNS node, schema DSL. The reader/builder
-is enough to interop with any Go ZAP service that publishes a fixed
-schema; higher-level helpers can follow as Python use cases land.
+Not yet ported: MCP bridge, mDNS node. The reader/builder/schema is
+enough to interop with any Go ZAP service that publishes a fixed
+schema; transport helpers can follow as Python use cases land.
+
+## Schema DSL
+
+```python
+from zap_py import Builder, StructBuilder, Type, parse
+
+person = (
+    StructBuilder("Person")
+    .uint32("id")
+    .text("name")
+    .int32("age")
+    .bool("active")
+    .list("tags", Type.TEXT)
+    .build()
+)
+
+f = {fld.name: fld.offset for fld in person.fields}
+
+b = Builder()
+ob = b.start_object(person.size)
+ob.set_uint32(f["id"], 42)
+ob.set_text(f["name"], "Vitalik")
+ob.set_int32(f["age"], 30)
+ob.set_bool(f["active"], True)
+ob.finish_as_root()
+```
+
+`StructBuilder` follows the same alignment rules as `schema.go`, so a
+struct declared in either language has byte-identical offsets and total
+size. Predefined schemas (`TRANSACTION_SCHEMA`, `BLOCK_HEADER_SCHEMA`,
+`LOG_SCHEMA`) match `evm.go` 1:1 — see
+`tests/test_schema.py::test_go_schema_fixture_parity` for the diff.

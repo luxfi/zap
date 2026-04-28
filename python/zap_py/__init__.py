@@ -37,6 +37,20 @@ from .evm import (
 )
 from .reader import Message, Object, List, parse
 from .builder import Builder, ObjectBuilder, ListBuilder
+from .schema import (
+    BLOCK_HEADER_SCHEMA,
+    Enum,
+    Field,
+    LOG_SCHEMA,
+    Schema,
+    Struct,
+    StructBuilder,
+    TRANSACTION_SCHEMA,
+    Type,
+    new_schema,
+    new_struct_builder,
+    type_size,
+)
 
 __all__ = [
     "HEADER_SIZE",
@@ -72,4 +86,16 @@ __all__ = [
     "ZERO_HASH",
     "address_from_hex",
     "hash_from_hex",
+    "Type",
+    "Field",
+    "Struct",
+    "Enum",
+    "Schema",
+    "StructBuilder",
+    "new_schema",
+    "new_struct_builder",
+    "type_size",
+    "TRANSACTION_SCHEMA",
+    "BLOCK_HEADER_SCHEMA",
+    "LOG_SCHEMA",
 ]
