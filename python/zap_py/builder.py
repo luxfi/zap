@@ -6,6 +6,14 @@ import struct
 from dataclasses import dataclass, field
 from typing import List as _PyList, Optional
 
+from .evm import (
+    ADDRESS_SIZE,
+    HASH_SIZE,
+    SIGNATURE_SIZE,
+    Address,
+    Hash,
+    Signature,
+)
 from .wire import ALIGNMENT, HEADER_SIZE, MAGIC, VERSION
 
 _U16 = struct.Struct("<H")
@@ -179,6 +187,30 @@ class ObjectBuilder:
             return
         rel_offset = obj_offset - (self._start_pos + field_offset)
         _I32.pack_into(self._b._buf, self._start_pos + field_offset, rel_offset)
+
+    def set_address(self, field_offset: int, addr) -> None:
+        data = addr.bytes if isinstance(addr, Address) else bytes(addr)
+        if len(data) != ADDRESS_SIZE:
+            raise ValueError(f"address must be {ADDRESS_SIZE} bytes, got {len(data)}")
+        self._ensure_field(field_offset + ADDRESS_SIZE)
+        start = self._start_pos + field_offset
+        self._b._buf[start:start + ADDRESS_SIZE] = data
+
+    def set_hash(self, field_offset: int, h) -> None:
+        data = h.bytes if isinstance(h, Hash) else bytes(h)
+        if len(data) != HASH_SIZE:
+            raise ValueError(f"hash must be {HASH_SIZE} bytes, got {len(data)}")
+        self._ensure_field(field_offset + HASH_SIZE)
+        start = self._start_pos + field_offset
+        self._b._buf[start:start + HASH_SIZE] = data
+
+    def set_signature(self, field_offset: int, sig) -> None:
+        data = sig.bytes if isinstance(sig, Signature) else bytes(sig)
+        if len(data) != SIGNATURE_SIZE:
+            raise ValueError(f"signature must be {SIGNATURE_SIZE} bytes, got {len(data)}")
+        self._ensure_field(field_offset + SIGNATURE_SIZE)
+        start = self._start_pos + field_offset
+        self._b._buf[start:start + SIGNATURE_SIZE] = data
 
     def set_list(self, field_offset: int, list_offset: int, length: int) -> None:
         self._ensure_field(field_offset + 8)

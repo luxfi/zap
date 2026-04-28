@@ -100,6 +100,34 @@ ZAP_PYTHON_FIXTURE=/tmp/zap_python_fixture.bin go test -run TestPythonFixture
 Both fixtures use identical schemas; the resulting binaries differ only in
 their embedded text payload, byte-for-byte.
 
+## EVM types
+
+```python
+from zap_py import Address, Hash, Signature, address_from_hex, hash_from_hex
+
+vitalik = address_from_hex("0xd8da6bf26964af9d7eed9e03e53415d37aa96045")
+tx_hash = hash_from_hex("0x" + "ab" * 32)
+sig = Signature(bytes(range(65)))            # r[32] || s[32] || v[1]
+
+ob.set_address(0, vitalik)
+ob.set_hash(20, tx_hash)
+ob.set_signature(52, sig)
+
+addr = root.address(0)        # Address
+view = root.address_slice(0)  # zero-copy memoryview
+print(addr.hex(), addr.is_zero())
+```
+
+`Address`, `Hash`, `Signature`, and `Bloom` are immutable fixed-width
+byte values. `.from_hex()` accepts `0x` / `0X` prefixes; `bytes()`,
+`__eq__`, and hashing all work the way you'd expect. A third fixture
+proves wire parity for an EVM-typed message:
+
+```bash
+go run ./python/testdata/gen_evm_fixture.go > /tmp/zap_evm_fixture.bin
+ZAP_GO_EVM_FIXTURE=/tmp/zap_evm_fixture.bin python -m pytest python/tests/test_evm.py::test_evm_go_fixture_interop
+```
+
 ## Coverage
 
 | Wire feature | Reader | Builder |
@@ -110,8 +138,9 @@ their embedded text payload, byte-for-byte.
 | Nested objects (relative offsets) | ✓ | ✓ |
 | Lists of `uint8`/`uint32`/`uint64`/objects/raw bytes | ✓ | ✓ |
 | Null object / null list | ✓ | ✓ |
+| EVM `Address` (20), `Hash` (32), `Signature` (65), `Bloom` (256) | ✓ | ✓ |
+| Lists of addresses / hashes (typed access) | ✓ | ✓ (via `add_bytes`) |
 
-Not yet ported: EVM helpers (`Address`, `Hash`, `Signature`), MCP bridge,
-mDNS node, schema DSL. The reader/builder is enough to interop with any
-Go ZAP service that publishes a fixed schema. Higher-level helpers can
-follow as Python use cases land.
+Not yet ported: MCP bridge, mDNS node, schema DSL. The reader/builder
+is enough to interop with any Go ZAP service that publishes a fixed
+schema; higher-level helpers can follow as Python use cases land.

@@ -9,6 +9,16 @@ from __future__ import annotations
 import struct
 from typing import Optional, Union
 
+from .evm import (
+    ADDRESS_SIZE,
+    HASH_SIZE,
+    SIGNATURE_SIZE,
+    Address,
+    Hash,
+    Signature,
+    ZERO_ADDRESS,
+    ZERO_HASH,
+)
 from .wire import (
     HEADER_SIZE,
     MAGIC,
@@ -207,6 +217,38 @@ class Object:
             return List(None, 0, 0)
         return List(self._msg, abs_offset, int(length))
 
+    def address(self, field_offset: int) -> Address:
+        pos = self._abs(field_offset)
+        if pos + ADDRESS_SIZE > len(self._msg._data):
+            return ZERO_ADDRESS
+        return Address(bytes(self._msg._data[pos:pos + ADDRESS_SIZE]))
+
+    def hash(self, field_offset: int) -> Hash:
+        pos = self._abs(field_offset)
+        if pos + HASH_SIZE > len(self._msg._data):
+            return ZERO_HASH
+        return Hash(bytes(self._msg._data[pos:pos + HASH_SIZE]))
+
+    def signature(self, field_offset: int) -> Signature:
+        pos = self._abs(field_offset)
+        if pos + SIGNATURE_SIZE > len(self._msg._data):
+            return Signature()
+        return Signature(bytes(self._msg._data[pos:pos + SIGNATURE_SIZE]))
+
+    def address_slice(self, field_offset: int) -> Optional[memoryview]:
+        """Zero-copy memoryview over the 20-byte address field."""
+        pos = self._abs(field_offset)
+        if pos + ADDRESS_SIZE > len(self._msg._data):
+            return None
+        return self._msg._data[pos:pos + ADDRESS_SIZE]
+
+    def hash_slice(self, field_offset: int) -> Optional[memoryview]:
+        """Zero-copy memoryview over the 32-byte hash field."""
+        pos = self._abs(field_offset)
+        if pos + HASH_SIZE > len(self._msg._data):
+            return None
+        return self._msg._data[pos:pos + HASH_SIZE]
+
 
 class List:
     """Zero-copy view of a ZAP list."""
@@ -263,3 +305,19 @@ class List:
         if end > len(self._msg._data):
             return b""
         return bytes(self._msg._data[self._offset:end])
+
+    def address(self, i: int) -> Address:
+        if i < 0 or i >= self._length:
+            return ZERO_ADDRESS
+        pos = self._offset + i * ADDRESS_SIZE
+        if pos + ADDRESS_SIZE > len(self._msg._data):
+            return ZERO_ADDRESS
+        return Address(bytes(self._msg._data[pos:pos + ADDRESS_SIZE]))
+
+    def hash(self, i: int) -> Hash:
+        if i < 0 or i >= self._length:
+            return ZERO_HASH
+        pos = self._offset + i * HASH_SIZE
+        if pos + HASH_SIZE > len(self._msg._data):
+            return ZERO_HASH
+        return Hash(bytes(self._msg._data[pos:pos + HASH_SIZE]))

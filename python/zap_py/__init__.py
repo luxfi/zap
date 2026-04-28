@@ -21,6 +21,20 @@ from .wire import (
     OutOfBounds,
     InvalidOffset,
 )
+from .evm import (
+    ADDRESS_SIZE,
+    BLOOM_SIZE,
+    HASH_SIZE,
+    SIGNATURE_SIZE,
+    Address,
+    Bloom,
+    Hash,
+    Signature,
+    ZERO_ADDRESS,
+    ZERO_HASH,
+    address_from_hex,
+    hash_from_hex,
+)
 from .reader import Message, Object, List, parse
 from .builder import Builder, ObjectBuilder, ListBuilder
 
@@ -46,4 +60,16 @@ __all__ = [
     "Builder",
     "ObjectBuilder",
     "ListBuilder",
+    "ADDRESS_SIZE",
+    "HASH_SIZE",
+    "SIGNATURE_SIZE",
+    "BLOOM_SIZE",
+    "Address",
+    "Hash",
+    "Signature",
+    "Bloom",
+    "ZERO_ADDRESS",
+    "ZERO_HASH",
+    "address_from_hex",
+    "hash_from_hex",
 ]
