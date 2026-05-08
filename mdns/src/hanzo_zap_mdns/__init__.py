@@ -159,6 +159,23 @@ def browse(timeout: float = 2.0) -> list[ZapService]:
     return found
 
 
+# ---- discovery + bridging ----------------------------------------------
+# Re-export so callers do `from hanzo_zap_mdns import expand_mcp_with_neighbors`.
+from .discover import (
+    discover_peers,
+    fetch_peer_tools,
+    expand_mcp_with_neighbors,
+    role_of,
+    ROLE_TO_NAMESPACE,
+)
+
+__all__ = [
+    "publish", "browse", "ZapService", "SERVICE_TYPE",
+    "discover_peers", "fetch_peer_tools", "expand_mcp_with_neighbors",
+    "role_of", "ROLE_TO_NAMESPACE",
+]
+
+
 if __name__ == "__main__":
     import sys
 
