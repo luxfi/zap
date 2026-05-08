@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	zapmdns "github.com/hanzoai/zap-mdns-go"
+	zapmdns "github.com/zap-proto/mdns"
 )
 
 // ExamplePublish — what every Go service in the Hanzo stack does on startup.

@@ -1,5 +1,5 @@
 {
-  "name": "@hanzo/zap-mdns",
+  "name": "@zap-proto/mdns",
   "version": "0.1.0",
   "description": "mDNS service-discovery binding for Hanzo services (HIP-0069)",
   "main": "dist/index.js",
