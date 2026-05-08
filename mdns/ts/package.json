@@ -1,0 +1,11 @@
+{
+  "name": "@hanzo/zap-mdns",
+  "version": "0.1.0",
+  "description": "mDNS service-discovery binding for Hanzo services (HIP-0069)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc -p ." },
+  "dependencies": { "bonjour-service": "^1.2.0" },
+  "devDependencies": { "typescript": "^5.0.0" },
+  "license": "MIT"
+}
