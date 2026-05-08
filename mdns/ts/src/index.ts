@@ -1,5 +1,5 @@
 /**
- * @hanzo/zap-mdns — mDNS publish + browse for Hanzo services per HIP-0069.
+ * @zap-proto/mdns — mDNS publish + browse for Hanzo services per HIP-0069.
  *
  * Single source of truth for the service-type, TXT key list, and role enum
  * across every Node service in the Hanzo stack (hanzo-iam, hanzo-desktop,

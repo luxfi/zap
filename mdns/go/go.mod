@@ -1,4 +1,4 @@
-module github.com/hanzoai/zap-mdns-go
+module github.com/zap-proto/mdns
 
 go 1.21
 

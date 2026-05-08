@@ -1,0 +1,25 @@
+[package]
+name = "hanzo-zap-mdns"
+version = "0.1.0"
+edition = "2021"
+description = "mDNS service-discovery binding for Hanzo services (HIP-0069)"
+license = "MIT"
+repository = "https://github.com/hanzoai/zap-mdns"
+authors = ["Hanzo AI Inc."]
+readme = "../README.md"
+
+[dependencies]
+mdns-sd = "0.13"
+hostname = "0.4"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[[example]]
+name = "publish_kms"
+path = "examples/publish_kms.rs"
+
+[[example]]
+name = "browse_all"
+path = "examples/browse_all.rs"
