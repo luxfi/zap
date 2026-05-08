@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hanzo-zap-mdns"
+version = "0.1.0"
+description = "mDNS auto-discovery for Hanzo ZAP services"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hanzo AI Inc." }]
+dependencies = [
+    "zeroconf>=0.130",
+]
+
+[project.scripts]
+hanzo-zap-mdns = "hanzo_zap_mdns.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
