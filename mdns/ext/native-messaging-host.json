@@ -1,0 +1,7 @@
+{
+  "name": "ai.hanzo.zap_mdns",
+  "description": "Hanzo ZAP mDNS browser — exposes mDNS discovery to the Hanzo browser extension",
+  "path": "/usr/local/bin/hanzo-zap-mdns-helper",
+  "type": "stdio",
+  "allowed_extensions": ["hanzo-ai@hanzo.ai"]
+}
