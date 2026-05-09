@@ -2,19 +2,16 @@
 /**
  * Native-messaging host for the Hanzo browser extension (HIP-0069).
  *
- * Stdio bridge: extension calls `chrome.runtime.sendNativeMessage(
- * 'ai.hanzo.zap_mdns', {op:'browse'})`, this script does the mDNS browse
- * via bonjour-service and returns the discovered services as JSON.
+ * Bridges the extension's `runtime.sendNativeMessage('ai.hanzo.zap_mdns',
+ * {op})` call into a bonjour-service mDNS browse. Local services are
+ * rewritten to ws://127.0.0.1:port/ — Firefox extension contexts treat
+ * non-loopback IPs as cross-origin even with <all_urls> host_perms.
  *
- * Install:
- *   1. `npm install bonjour-service` next to this file
- *   2. Copy/symlink this file to ~/.hanzo/zap-mdns/node/helper.js
- *   3. Drop a small wrapper script that pins node + NODE_PATH at
- *      ~/.hanzo/zap-mdns/helper (chmod +x)
- *   4. Drop the WebExtension native-messaging-host JSON at the
- *      browser's NMH directory pointing `path` at the wrapper.
+ * Install via the wrapper at ~/.hanzo/zap-mdns/helper which finds node
+ * across the user's nvm/homebrew/PATH and exports NODE_PATH so this
+ * script's `require('bonjour-service')` resolves under any spawn env.
  *
- * Logs every request to /tmp/hanzo-zap-mdns.log for diagnostics.
+ * Logs to /tmp/hanzo-zap-mdns.log for diagnostics.
  */
 const { Bonjour } = require('bonjour-service');
 const fs = require('fs');
