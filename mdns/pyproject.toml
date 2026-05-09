@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "zap-mdns"
 version = "0.1.0"
-description = "mDNS auto-discovery for Hanzo ZAP services"
+description = "mDNS service-discovery binding for the ZAP protocol (HIP-0069)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Hanzo AI Inc." }]
+authors = [{ name = "ZAP Protocol", email = "dev@zap.dev" }]
 dependencies = [
     "zeroconf>=0.130",
 ]
