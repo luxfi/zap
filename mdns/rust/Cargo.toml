@@ -5,7 +5,7 @@ edition = "2021"
 description = "mDNS service-discovery binding for Hanzo services (HIP-0069)"
 license = "MIT"
 repository = "https://github.com/hanzoai/zap-mdns"
-authors = ["Hanzo AI Inc."]
+authors = ["ZAP Protocol <dev@zap.dev>"]
 readme = "../README.md"
 
 [dependencies]
