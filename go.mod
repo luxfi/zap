@@ -2,7 +2,10 @@ module github.com/luxfi/zap
 
 go 1.26
 
-require github.com/luxfi/mdns v0.1.0
+require (
+	github.com/luxfi/mdns v0.1.0
+	golang.org/x/crypto v0.25.0
+)
 
 require (
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
