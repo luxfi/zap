@@ -1,142 +1,79 @@
 // Copyright (C) 2019-2026, Lux Industries Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
-// pq_attestation.go — strict-PQ identity binding on ZAP handshakes.
+// pq_attestation.go — ZAP channel-binding ML-DSA-65 attestation.
 //
-// Go 1.26's crypto/tls ships X25519MLKEM768 / SecP256r1MLKEM768 /
-// SecP384r1MLKEM1024 as TLS 1.3 hybrid post-quantum key exchange
-// groups — enabled by default. ZAP's TLS-wrapped transport already
-// gets a quantum-secure session key OUT OF THE BOX via that
-// hybrid KEX.
+// Go 1.26's crypto/tls ships X25519MLKEM768 hybrid PQ key exchange
+// by default; every ZAP TLS transport gets a quantum-secure session
+// key out of the box. The remaining gap is identity: TLS cert
+// signatures are still classical ECDSA / Ed25519 because Go doesn't
+// yet ship ML-DSA cert sigs.
 //
-// What standard TLS does NOT yet ship is post-quantum certificate
-// signatures: the cert authenticating each TLS endpoint is still
-// classical ECDSA (or Ed25519 when Go ships it for TLS cert use).
-// A quantum adversary that compromises an ECDSA cert key can
-// impersonate the endpoint even though the session-key KEX was
-// post-quantum.
+// This file binds the TLS endpoint to the peer's strict-PQ identity
+// at the application layer. After the TLS handshake completes,
+// each peer sends an Attestation as the first ZAP message:
 //
-// This package closes that gap by binding the TLS cert to the
-// peer's post-quantum identity at the application layer: each
-// peer sends an Attestation as the first ZAP message after the
-// handshake completes. The attestation is a FIPS 204 ML-DSA-65
-// signature over a SHAKE256-384 transcript that includes:
+//   Attestation = {
+//     PubKey: peer's FIPS 204 ML-DSA-65 public key (1952 bytes),
+//     Sig:    mldsa65.Sign(privKey, TranscriptHash(ctx)),
+//   }
 //
-//   - the TLS cert fingerprint (so a stolen cert can't be paired
-//     with a different PQ identity),
-//   - the chain id (so a replay across chains fails),
-//   - a per-session nonce (so a replay within a chain fails).
+//   TranscriptHash = SHAKE256-384(
+//     "ZAP-PQ-V1"
+//     || TLS cert fingerprint   (stolen cert can't be paired with a
+//                                different PQ identity)
+//     || chain id               (cross-chain replay protection)
+//     || peer ML-KEM-768 pubkey  (binds to the same KEM key the TLS
+//                                handshake used)
+//     || timestamp              (intra-chain replay window)
+//     || per-session nonce      (cross-session replay protection)
+//   )
 //
-// The verifier checks the signature against the peer's PQ public
-// key AND that the public key is a member of the chain's
-// validator set. Either check failing closes the connection.
+// Profile dispatch routes through lux/pq.ValidateMode:
 //
-// This package is verifier-agnostic on purpose: the actual
-// ML-DSA-65 verification lives in luxfi/crypto/mldsa, but zap
-// avoids the dep (zap is at the bottom of the dependency tree
-// and shouldn't carry crypto transitively). Callers supply an
-// AttestationVerifier that wraps mldsa65.Verify.
+//   profile, _ := pq.ModeFromString(cfg.ZAPProfile)
+//   verify := func() error {
+//       hash := zap.TranscriptHash(ctx)
+//       return verifier(att.PubKey, att.Sig, hash[:])
+//   }
+//   if err := pq.ValidateMode(profile, att, verify); err != nil {
+//       // strict-PQ refused a missing attestation, or the verifier
+//       // returned a non-nil error
+//   }
+//
+// Same gate, same sentinel, same mode vocabulary as lux/warp,
+// lx/dex, lux/fhe, luxfi/evm.
 
 package zap
 
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
-	"fmt"
 
 	"golang.org/x/crypto/sha3"
 )
-
-// SecurityProfile is the ZAP security posture a deployment pins.
-// Matches the shape used by lux/warp, lx/dex, lux/fhe, luxfi/evm
-// so downstream consumers see one vocabulary across every layer.
-type SecurityProfile int
-
-const (
-	// ProfileClassical accepts ZAP connections without a PQ
-	// Attestation. TLS handshake is the only identity check.
-	// Suitable for legacy deployments before any peer has
-	// generated ML-DSA validator material.
-	ProfileClassical SecurityProfile = iota
-
-	// ProfileHybrid validates an Attestation WHEN the peer sends
-	// one, but accepts connections without one (falling back to
-	// TLS identity alone with a stale-PQ warning). Safe migration
-	// middle.
-	ProfileHybrid
-
-	// ProfileStrictPQ REFUSES every ZAP connection whose peer
-	// does NOT present a valid Attestation bound to the TLS cert
-	// fingerprint. Canonical Liquid / strict Lux / strict Zoo
-	// profile.
-	ProfileStrictPQ
-)
-
-// String returns the canonical wire name. Audit pipelines match
-// on these strings; renaming here breaks every downstream consumer.
-func (p SecurityProfile) String() string {
-	switch p {
-	case ProfileClassical:
-		return "classical"
-	case ProfileHybrid:
-		return "hybrid"
-	case ProfileStrictPQ:
-		return "strict-pq"
-	default:
-		return "unknown"
-	}
-}
-
-// IsPostQuantum reports whether this profile REFUSES connections
-// missing a PQ Attestation. Only ProfileStrictPQ returns true.
-func (p SecurityProfile) IsPostQuantum() bool {
-	return p == ProfileStrictPQ
-}
-
-// IsPQAware reports whether this profile VALIDATES an attestation
-// when the peer presents one. Both ProfileHybrid and
-// ProfileStrictPQ return true; ProfileClassical ignores
-// attestations even when they're sent.
-func (p SecurityProfile) IsPQAware() bool {
-	return p == ProfileHybrid || p == ProfileStrictPQ
-}
-
-// ProfileFromString parses an operator-supplied profile string.
-// Refuses unknown values rather than defaulting.
-func ProfileFromString(s string) (SecurityProfile, error) {
-	switch s {
-	case "classical":
-		return ProfileClassical, nil
-	case "hybrid":
-		return ProfileHybrid, nil
-	case "strict-pq":
-		return ProfileStrictPQ, nil
-	default:
-		return ProfileClassical, fmt.Errorf("zap: unknown profile %q (want classical|hybrid|strict-pq)", s)
-	}
-}
-
-// ErrClassicalAuthForbidden is returned when a strict-PQ ZAP
-// connection is missing a PQ Attestation. Name and shape match
-// lux/warp, lx/dex, luxfi/evm so audit pipelines can grep one
-// identifier across every strict-PQ refusal site in the system.
-var ErrClassicalAuthForbidden = errors.New(
-	"zap: classical authentication forbidden under strict-PQ profile (PQ Attestation required)")
 
 // Attestation is the wire shape a ZAP peer presents after the
 // TLS handshake completes. PubKey + Sig are opaque bytes from
 // zap's perspective; the AttestationVerifier owns the format
 // (FIPS 204 ML-DSA-65 pubkey 1952 bytes, signature 3293 bytes
-// for Liquid; the same wire format works for ML-DSA-87 with
-// different byte counts for high-value Zoo chains).
+// for Liquid; ML-DSA-87 with different byte counts for
+// high-value Zoo chains).
 type Attestation struct {
-	// PubKey is the peer's strict-PQ public key. Verifier
+	// PubKey is the peer's strict-PQ public key. The verifier
 	// confirms membership in the chain's validator set BEFORE
 	// trusting the signature.
 	PubKey []byte
 	// Sig is the signature over TranscriptHash(...).
 	Sig []byte
+}
+
+// HasPQEvidence implements pq.PQEvidencer. A non-nil Attestation
+// with a non-empty Sig counts as evidence — the gate then
+// dispatches to the verifier, which actually checks the
+// signature + validator-set membership.
+func (a *Attestation) HasPQEvidence() bool {
+	return a != nil && len(a.PubKey) > 0 && len(a.Sig) > 0
 }
 
 // AttestationContext bundles the inputs a verifier needs to
@@ -212,57 +149,9 @@ func TLSCertFingerprintFromBytes(certDER []byte) [32]byte {
 	return sha256.Sum256(certDER)
 }
 
-// AttestationVerifier validates a peer's PQ attestation. Callers
-// (e.g. lux/node, lux/kms) supply this — typically a one-line
-// wrapper over mldsa65.PublicKeyFromBytes(...).VerifySignature(...)
-// that ALSO confirms the public key is a member of the chain's
-// validator set.
-type AttestationVerifier func(pubKey, sig, transcriptHash []byte) error
-
-// RequireAttestationForProfile is the single seam every ZAP
-// transport-init should call BEFORE trusting a connection's
-// peer identity.
-//
-//   - ProfileClassical: returns nil regardless (TLS identity OK).
-//   - ProfileHybrid: returns nil regardless — if the peer sent
-//     an attestation, validate it via the verifier; if not, fall
-//     back to TLS identity alone (with a stale-PQ warning logged
-//     by the caller).
-//   - ProfileStrictPQ: returns ErrClassicalAuthForbidden if the
-//     attestation is nil. Otherwise calls the verifier; verifier
-//     errors propagate.
-func RequireAttestationForProfile(
-	profile SecurityProfile,
-	att *Attestation,
-	ctx *AttestationContext,
-	verify AttestationVerifier,
-) error {
-	if !profile.IsPQAware() {
-		// Classical profile: never validate, never refuse.
-		return nil
-	}
-	if att == nil {
-		if profile.IsPostQuantum() {
-			return ErrClassicalAuthForbidden
-		}
-		// Hybrid + nil attestation: accept, caller decides
-		// whether to log a stale-PQ warning.
-		return nil
-	}
-	if verify == nil {
-		return errors.New("zap: nil AttestationVerifier supplied to RequireAttestationForProfile")
-	}
-	if ctx == nil {
-		return errors.New("zap: nil AttestationContext")
-	}
-	hash := TranscriptHash(ctx)
-	return verify(att.PubKey, att.Sig, hash[:])
-}
-
 // leftEncode is the SP 800-185 §2.3.1 left_encode operation —
 // length-prefix framing so concatenated fields can't be
-// ambiguously parsed. Local copy avoids a dep on luxfi/ids /
-// luxfi/consensus from a leaf package.
+// ambiguously parsed.
 func leftEncode(x uint64) []byte {
 	if x == 0 {
 		return []byte{0x01, 0x00}
