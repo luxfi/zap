@@ -4,7 +4,8 @@ go 1.26
 
 require (
 	github.com/luxfi/mdns v0.1.0
-	golang.org/x/crypto v0.25.0
+	github.com/luxfi/pq v1.0.3
+	golang.org/x/crypto v0.41.0
 )
 
 require (
@@ -12,8 +13,8 @@ require (
 	github.com/grandcat/zeroconf v1.0.0 // indirect
 	github.com/miekg/dns v1.1.62 // indirect
 	golang.org/x/mod v0.18.0 // indirect
-	golang.org/x/net v0.27.0 // indirect
+	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
-	golang.org/x/sys v0.22.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/tools v0.22.0 // indirect
 )
