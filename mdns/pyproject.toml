@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zap-mdns"
-version = "0.1.0"
+version = "0.1.1"
 description = "mDNS service-discovery binding for the ZAP protocol (HIP-0069)"
 readme = "README.md"
 requires-python = ">=3.10"
