@@ -31,3 +31,51 @@ node_modules/
 
 # Playwright MCP cache
 .playwright-mcp/
+
+# Sibling repos sharing this parent directory (independent git repos,
+# not part of luxfi/zap — language bindings live at zap-protocol/* and
+# subprotocol specs live at zap-proto/*).
+/a2a/
+/acp/
+/bench/
+/dev/
+/fix/
+/http/
+/mcp/
+/migration/
+/papers/
+/proofs/
+/rns/
+/ws/
+/zap/
+/zap-c/
+/zap-cpp/
+/zap-cpp-core/
+/zap-cs/
+/zap-dlang/
+/zap-erlang/
+/zap-go/
+/zap-golang/
+/zap-haskell/
+/zap-intellij/
+/zap-java/
+/zap-js/
+/zap-lsp/
+/zap-lua/
+/zap-nim/
+/zap-node/
+/zap-ocaml/
+/zap-ocaml-rpc/
+/zap-protocol.github.io/
+/zap-py/
+/zap-python/
+/zap-ruby/
+/zap-rust/
+/zap-scala/
+/zap-sublime/
+/zap-test/
+/zap-vim/
+/zap-vscode/
+/zap-wasm/
+/zap-wireshark/
+/zerocopy/
