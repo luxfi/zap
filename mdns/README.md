@@ -1,8 +1,8 @@
-# `@hanzo/zap-mdns` — mDNS auto-discovery for ZAP services
+# `zap-mdns` — mDNS auto-discovery for ZAP services
 
 Replaces the hard-coded `[9999..9995]` port-probe in browser extensions
 and the lock-file dance in `~/.hanzo/extension/config.json` with proper
-multicast DNS service discovery (`_hanzo-zap._tcp.local.`).
+multicast DNS service discovery (`_hanzo._tcp.local.`, canonical per HIP-0069).
 
 ## Why
 
@@ -16,8 +16,8 @@ multicast DNS service discovery (`_hanzo-zap._tcp.local.`).
 ## Service definition
 
 ```
-type:       _hanzo-zap._tcp.local.
-name:       <server_id>._hanzo-zap._tcp.local.
+type:       _hanzo._tcp.local.
+name:       <server_id>._hanzo._tcp.local.
 port:       <bound port>
 txt:
     server_id   = mcp-py-12345
@@ -42,7 +42,16 @@ Existing port-probe path remains in the extension as a fallback. mDNS is
 attempted FIRST; if zero services found within 2s, fall through to the
 fixed-port probe. Once mDNS adoption is stable, port-probe is removed.
 
+## Install
+
+```
+pip install zap-mdns
+# or
+uv pip install zap-mdns
+```
+
 ## Status
 
-Skeleton — wired into `~/work/zap/` for cross-org reuse (hanzo / lux /
-zoo / liquidity all consume the same package).
+Published on PyPI: <https://pypi.org/project/zap-mdns/> — wired into
+`~/work/zap/` for cross-org reuse (hanzo / lux / zoo / liquidity all
+consume the same package).
