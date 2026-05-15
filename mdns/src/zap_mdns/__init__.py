@@ -6,7 +6,7 @@ hanzo-dev, anyone wanting to talk to a ZAP server) call ``browse(timeout=2)``
 to get the live list — no port assumptions, no registry files.
 
 Service definition:
-    type:  _hanzo-zap._tcp.local.
+    type:  _hanzo._tcp.local.   (canonical per HIP-0069)
     txt:   server_id, agent_label, version, capabilities, proto
 
 Requires ``zeroconf`` (pip install zeroconf). Falls back gracefully if
