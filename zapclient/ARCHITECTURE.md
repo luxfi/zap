@@ -161,9 +161,9 @@ fabrics during the transition.
 |-------|------------------------|----------------------------------------------|
 | 1     | hanzoai/tasks          | Already supports ZAP via tasks-client.       |
 | 1     | hanzoai/replicate/s3   | Wire ZAP transport via Client.HTTPClient.    |
-| 2     | /ta         | NewServer + Register procedures.             |
-| 2     | /bd         | Connect to TA; deprecate BD's HTTP shim.     |
-| 3     | /ats        | NewServer + Register; clients of BD migrate. |
+| 2     | luxfi/ta               | NewServer + Register procedures.             |
+| 2     | luxfi/bd               | Connect to TA; deprecate BD's HTTP shim.     |
+| 3     | luxfi/ats              | NewServer + Register; clients of BD migrate. |
 | 4     | hanzoai/gateway        | Native-ZAP fan-out for in-cluster routes.    |
 | 5     | hanzoai/ingress        | Ingress speaks both: HTTP in, ZAP out.       |
 | 6     | Browser-facing streams | zapsse handlers per service.                 |
