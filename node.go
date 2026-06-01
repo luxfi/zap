@@ -214,17 +214,9 @@ func (n *Node) Call(ctx context.Context, peerID string, msg *Message) (*Message,
 		conn.pendMu.Unlock()
 	}()
 
-	// Wrap message with request ID header
-	// We inject the reqID into the first 8 bytes
-	origBytes := msg.Bytes()
-	wrappedBytes := make([]byte, len(origBytes)+8)
-	binary.LittleEndian.PutUint32(wrappedBytes[0:4], reqID)
-	binary.LittleEndian.PutUint32(wrappedBytes[4:8], ReqFlagReq)
-	copy(wrappedBytes[8:], origBytes)
-
-	// Send wrapped request
+	// Send wrapped request (one canonical encoder via WrapCorrelated).
 	conn.mu.Lock()
-	err = writeMessage(conn.conn, wrappedBytes)
+	err = writeMessage(conn.conn, WrapCorrelated(reqID, ReqFlagReq, msg.Bytes()))
 	conn.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -311,25 +303,13 @@ func (n *Node) handleConn(netConn net.Conn) {
 	// Set initial read deadline for handshake
 	netConn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
-	// Read handshake to get peer ID (simple: 64-byte node ID as bytes)
-	var peerID string
-	{
-		msg, err := readMessage(netConn)
-		if err != nil {
-			n.logger.Debug("Handshake read error", "error", err)
-			return
-		}
-		// Node ID is stored as raw bytes at offset 0, length at offset 60
-		root := msg.Root()
-		idLen := root.Uint32(60)
-		if idLen > 0 && idLen <= 60 {
-			idBytes := make([]byte, idLen)
-			for i := uint32(0); i < idLen; i++ {
-				idBytes[i] = root.Uint8(int(i))
-			}
-			peerID = string(idBytes)
-		}
+	// Read handshake to get peer ID.
+	data, err := readMessageRaw(netConn)
+	if err != nil {
+		n.logger.Debug("Handshake read error", "error", err)
+		return
 	}
+	peerID, _ := DecodeNodeIDHandshake(data)
 
 	// Check for duplicate BEFORE sending handshake response
 	// This way the outgoing side will get EOF and know we rejected
@@ -341,23 +321,9 @@ func (n *Node) handleConn(netConn net.Conn) {
 	}
 	n.connsMu.Unlock()
 
-	// Send our handshake
-	{
-		b := NewBuilder(128)
-		obj := b.StartObject(64)
-		// Write node ID as raw bytes
-		idBytes := []byte(n.nodeID)
-		for i, c := range idBytes {
-			if i >= 60 {
-				break
-			}
-			obj.SetUint8(i, c)
-		}
-		obj.SetUint32(60, uint32(len(idBytes)))
-		obj.FinishAsRoot()
-		if err := writeMessage(netConn, b.Finish()); err != nil {
-			return
-		}
+	// Send our handshake.
+	if err := writeMessage(netConn, EncodeNodeIDHandshake(n.nodeID)); err != nil {
+		return
 	}
 
 	// Re-check after handshake (another connection might have been established while we were sending)
@@ -389,7 +355,21 @@ func (n *Node) handleConn(netConn net.Conn) {
 		n.logger.Info("Peer disconnected", "peerID", peerID)
 	}()
 
-	// Handle messages
+	n.dispatchLoop(netConn, conn, peerID)
+}
+
+// dispatchLoop is the canonical message-routing loop used by both
+// inbound (handleConn) and outbound (ConnectDirect) connections.
+// It reads each message, classifies it via UnwrapCorrelated, and
+// routes:
+//   - Call requests → handler → WrapCorrelated(ReqFlagResp) response
+//   - Call responses → conn.pending channel for the awaiting goroutine
+//   - Uncorrelated messages → handler → optional response
+//
+// Returns when the underlying conn errors (non-timeout) or ctx is
+// cancelled. The caller is responsible for the per-connection
+// cleanup (conns-map delete, log).
+func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 	for {
 		select {
 		case <-n.ctx.Done():
@@ -397,14 +377,12 @@ func (n *Node) handleConn(netConn net.Conn) {
 		default:
 		}
 
-		// Set read deadline so we can check for context cancellation
 		netConn.SetReadDeadline(time.Now().Add(1 * time.Second))
 		data, err := readMessageRaw(netConn)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return
 			}
-			// Check if it's a timeout - that's ok, just continue
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
@@ -412,14 +390,10 @@ func (n *Node) handleConn(netConn net.Conn) {
 			return
 		}
 
-		// Check if this is a Call request/response (has 8-byte header)
-		if len(data) >= 8 {
-			reqFlag := binary.LittleEndian.Uint32(data[4:8])
-			if reqFlag == ReqFlagResp {
-				// Response to a pending Call - route to waiting goroutine
-				reqID := binary.LittleEndian.Uint32(data[0:4])
-				msg, err := Parse(data[8:])
-				if err == nil {
+		if reqID, flag, body, isCall := UnwrapCorrelated(data); isCall {
+			switch flag {
+			case ReqFlagResp:
+				if msg, err := Parse(body); err == nil {
 					conn.pendMu.Lock()
 					if ch, ok := conn.pending[reqID]; ok {
 						select {
@@ -429,73 +403,60 @@ func (n *Node) handleConn(netConn net.Conn) {
 					}
 					conn.pendMu.Unlock()
 				}
-				continue
-			} else if reqFlag == ReqFlagReq {
-				// Incoming Call request - handle and send response
-				reqID := binary.LittleEndian.Uint32(data[0:4])
-				msg, err := Parse(data[8:])
+			case ReqFlagReq:
+				msg, err := Parse(body)
 				if err != nil {
 					continue
 				}
-
 				msgType := msg.Flags() >> 8
 				n.handlersMu.RLock()
 				handler, ok := n.handlers[msgType]
 				n.handlersMu.RUnlock()
-
-				if ok {
-					resp, err := handler(n.ctx, peerID, msg)
-					if err != nil {
-						n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", err)
-						continue
-					}
-					if resp != nil {
-						// Send response with correlation header
-						respBytes := resp.Bytes()
-						wrappedResp := make([]byte, len(respBytes)+8)
-						binary.LittleEndian.PutUint32(wrappedResp[0:4], reqID)
-						binary.LittleEndian.PutUint32(wrappedResp[4:8], ReqFlagResp)
-						copy(wrappedResp[8:], respBytes)
-						conn.mu.Lock()
-						writeErr := writeMessage(netConn, wrappedResp)
-						conn.mu.Unlock()
-						if writeErr != nil {
-							n.logger.Debug("Write error", "peerID", peerID, "error", writeErr)
-							return
-						}
+				if !ok {
+					continue
+				}
+				resp, herr := handler(n.ctx, peerID, msg)
+				if herr != nil {
+					n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", herr)
+					continue
+				}
+				if resp != nil {
+					conn.mu.Lock()
+					writeErr := writeMessage(netConn, WrapCorrelated(reqID, ReqFlagResp, resp.Bytes()))
+					conn.mu.Unlock()
+					if writeErr != nil {
+						n.logger.Debug("Write error", "peerID", peerID, "error", writeErr)
+						return
 					}
 				}
-				continue
 			}
+			continue
 		}
 
-		// Regular message (no correlation header) - use standard handler
+		// Uncorrelated message — direct handler dispatch.
 		msg, err := Parse(data)
 		if err != nil {
 			continue
 		}
-
-		// Get message type from flags (upper 8 bits)
 		msgType := msg.Flags() >> 8
-
 		n.handlersMu.RLock()
 		handler, ok := n.handlers[msgType]
 		n.handlersMu.RUnlock()
-
-		if ok {
-			resp, err := handler(n.ctx, peerID, msg)
-			if err != nil {
-				n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", err)
-				continue
-			}
-			if resp != nil {
-				conn.mu.Lock()
-				writeErr := writeMessage(netConn, resp.Bytes())
-				conn.mu.Unlock()
-				if writeErr != nil {
-					n.logger.Debug("Write error", "peerID", peerID, "error", writeErr)
-					return
-				}
+		if !ok {
+			continue
+		}
+		resp, herr := handler(n.ctx, peerID, msg)
+		if herr != nil {
+			n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", herr)
+			continue
+		}
+		if resp != nil {
+			conn.mu.Lock()
+			writeErr := writeMessage(netConn, resp.Bytes())
+			conn.mu.Unlock()
+			if writeErr != nil {
+				n.logger.Debug("Write error", "peerID", peerID, "error", writeErr)
+				return
 			}
 		}
 	}
@@ -536,7 +497,13 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 		return conn, nil
 	}
 
-	// Look up peer via discovery
+	// Look up peer via discovery. Discovery is nil for noDiscovery
+	// nodes and is cleared on Stop(); both cases are races against
+	// in-flight Broadcasts and should report a benign "peer not
+	// found" rather than panic.
+	if n.discovery == nil {
+		return nil, fmt.Errorf("peer not found: %s (discovery unavailable)", peerID)
+	}
 	peers := n.discovery.Peers()
 	var peer *mdns.Peer
 	for _, p := range peers {
@@ -559,46 +526,22 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 		netConn = tls.Client(netConn, n.tlsCfg)
 	}
 
-	// Send handshake (node ID as raw bytes)
-	{
-		b := NewBuilder(128)
-		obj := b.StartObject(64)
-		idBytes := []byte(n.nodeID)
-		for i, c := range idBytes {
-			if i >= 60 {
-				break
-			}
-			obj.SetUint8(i, c)
-		}
-		obj.SetUint32(60, uint32(len(idBytes)))
-		obj.FinishAsRoot()
-		if err := writeMessage(netConn, b.Finish()); err != nil {
-			netConn.Close()
-			return nil, err
-		}
+	// Send handshake (canonical encoder).
+	if err := writeMessage(netConn, EncodeNodeIDHandshake(n.nodeID)); err != nil {
+		netConn.Close()
+		return nil, err
 	}
 
-	// Read handshake response
-	{
-		msg, err := readMessage(netConn)
-		if err != nil {
-			netConn.Close()
-			return nil, err
-		}
-		root := msg.Root()
-		idLen := root.Uint32(60)
-		var remotePeerID string
-		if idLen > 0 && idLen <= 60 {
-			idBytes := make([]byte, idLen)
-			for i := uint32(0); i < idLen; i++ {
-				idBytes[i] = root.Uint8(int(i))
-			}
-			remotePeerID = string(idBytes)
-		}
-		if remotePeerID != peerID {
-			netConn.Close()
-			return nil, fmt.Errorf("peer ID mismatch: expected %s, got %s", peerID, remotePeerID)
-		}
+	// Read handshake response (canonical decoder).
+	respData, err := readMessageRaw(netConn)
+	if err != nil {
+		netConn.Close()
+		return nil, err
+	}
+	remotePeerID, _ := DecodeNodeIDHandshake(respData)
+	if remotePeerID != peerID {
+		netConn.Close()
+		return nil, fmt.Errorf("peer ID mismatch: expected %s, got %s", peerID, remotePeerID)
 	}
 
 	conn = &Conn{
@@ -701,45 +644,20 @@ func (n *Node) ConnectDirect(addr string) error {
 		netConn = tls.Client(netConn, n.tlsCfg)
 	}
 
-	// Send handshake
-	{
-		b := NewBuilder(128)
-		obj := b.StartObject(64)
-		idBytes := []byte(n.nodeID)
-		for i, c := range idBytes {
-			if i >= 60 {
-				break
-			}
-			obj.SetUint8(i, c)
-		}
-		obj.SetUint32(60, uint32(len(idBytes)))
-		obj.FinishAsRoot()
-		if err := writeMessage(netConn, b.Finish()); err != nil {
-			netConn.Close()
-			return err
-		}
+	// Send handshake.
+	if err := writeMessage(netConn, EncodeNodeIDHandshake(n.nodeID)); err != nil {
+		netConn.Close()
+		return err
 	}
 
-	// Read handshake response
-	var peerID string
-	{
-		msg, err := readMessage(netConn)
-		if err != nil {
-			netConn.Close()
-			return err
-		}
-		root := msg.Root()
-		idLen := root.Uint32(60)
-		if idLen > 0 && idLen <= 60 {
-			idBytes := make([]byte, idLen)
-			for i := uint32(0); i < idLen; i++ {
-				idBytes[i] = root.Uint8(int(i))
-			}
-			peerID = string(idBytes)
-		}
+	// Read handshake response.
+	data, err := readMessageRaw(netConn)
+	if err != nil {
+		netConn.Close()
+		return err
 	}
-
-	if peerID == "" {
+	peerID, ok := DecodeNodeIDHandshake(data)
+	if !ok {
 		netConn.Close()
 		return fmt.Errorf("invalid peer handshake")
 	}
@@ -763,120 +681,21 @@ func (n *Node) ConnectDirect(addr string) error {
 
 	n.logger.Info("Connected to peer", "peerID", peerID, "addr", addr)
 
-	// Start receive loop
+	// Start receive loop — shares the canonical dispatchLoop with
+	// the inbound (handleConn) path so message routing has exactly
+	// one implementation.
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
 		defer func() {
 			n.connsMu.Lock()
-			// Only delete if this is still our connection
 			if cur, ok := n.conns[peerID]; ok && cur == conn {
 				delete(n.conns, peerID)
 			}
 			n.connsMu.Unlock()
 			n.logger.Info("Peer disconnected", "peerID", peerID)
 		}()
-
-		for {
-			select {
-			case <-n.ctx.Done():
-				return
-			default:
-			}
-
-			// Set read deadline so we can check for context cancellation
-			netConn.SetReadDeadline(time.Now().Add(1 * time.Second))
-			data, err := readMessageRaw(netConn)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
-				return
-			}
-
-			// Check if this is a Call request/response (has 8-byte header)
-			if len(data) >= 8 {
-				reqFlag := binary.LittleEndian.Uint32(data[4:8])
-				if reqFlag == ReqFlagResp {
-					// Response to a pending Call - route to waiting goroutine
-					reqID := binary.LittleEndian.Uint32(data[0:4])
-					msg, err := Parse(data[8:])
-					if err == nil {
-						conn.pendMu.Lock()
-						if ch, ok := conn.pending[reqID]; ok {
-							select {
-							case ch <- msg:
-							default:
-							}
-						}
-						conn.pendMu.Unlock()
-					}
-					continue
-				} else if reqFlag == ReqFlagReq {
-					// Incoming Call request - handle and send response
-					reqID := binary.LittleEndian.Uint32(data[0:4])
-					msg, err := Parse(data[8:])
-					if err != nil {
-						continue
-					}
-
-					msgType := msg.Flags() >> 8
-					n.handlersMu.RLock()
-					handler, ok := n.handlers[msgType]
-					n.handlersMu.RUnlock()
-
-					if ok {
-						resp, err := handler(n.ctx, peerID, msg)
-						if err != nil {
-							n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", err)
-							continue
-						}
-						if resp != nil {
-							// Send response with correlation header
-							respBytes := resp.Bytes()
-							wrappedResp := make([]byte, len(respBytes)+8)
-							binary.LittleEndian.PutUint32(wrappedResp[0:4], reqID)
-							binary.LittleEndian.PutUint32(wrappedResp[4:8], ReqFlagResp)
-							copy(wrappedResp[8:], respBytes)
-							conn.mu.Lock()
-							writeErr := writeMessage(netConn, wrappedResp)
-							conn.mu.Unlock()
-							if writeErr != nil {
-								return
-							}
-						}
-					}
-					continue
-				}
-			}
-
-			// Regular message (no correlation header) - use standard handler
-			msg, err := Parse(data)
-			if err != nil {
-				continue
-			}
-
-			msgType := msg.Flags() >> 8
-			n.handlersMu.RLock()
-			handler, ok := n.handlers[msgType]
-			n.handlersMu.RUnlock()
-
-			if ok {
-				resp, err := handler(n.ctx, peerID, msg)
-				if err != nil {
-					n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", err)
-					continue
-				}
-				if resp != nil {
-					conn.mu.Lock()
-					writeErr := writeMessage(netConn, resp.Bytes())
-					conn.mu.Unlock()
-					if writeErr != nil {
-						return
-					}
-				}
-			}
-		}
+		n.dispatchLoop(netConn, conn, peerID)
 	}()
 
 	return nil
