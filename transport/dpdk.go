@@ -9,10 +9,10 @@ import "errors"
 // hugepage path is wired. See dpdk_linux.go for the build-tagged factory.
 //
 // Hardware/software required for the real impl:
-//   * Linux kernel with hugepage support (2MB or 1GB pages)
-//   * DPDK 23.11+ build with cuda_gha or cuda_kernel mempool driver
-//   * Any DPDK-supported NIC (broader than GPUDirect's Mellanox-only)
-//   * NVIDIA GPU with CUDA Toolkit 12+
+//   - Linux kernel with hugepage support (2MB or 1GB pages)
+//   - DPDK 23.11+ build with cuda_gha or cuda_kernel mempool driver
+//   - Any DPDK-supported NIC (broader than GPUDirect's Mellanox-only)
+//   - NVIDIA GPU with CUDA Toolkit 12+
 //
 // The real path: DPDK takes the NIC via kernel-bypass, ingests packets
 // into hugepages, cudaHostRegister maps the hugepages into CUDA-visible

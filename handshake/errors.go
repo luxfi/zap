@@ -14,18 +14,18 @@ import (
 type AlertCode uint8
 
 const (
-	AlertNone                 AlertCode = 0x00 // reserved
-	AlertDecodeError          AlertCode = 0x01
-	AlertUnsupportedSuite     AlertCode = 0x02
-	AlertAuthFailed           AlertCode = 0x03
-	AlertReplayDetected       AlertCode = 0x04
-	AlertDowngradeRefused     AlertCode = 0x05
-	AlertHandshakeTimeout     AlertCode = 0x06
-	AlertNonceViolation       AlertCode = 0x07
-	AlertPSKUnknown           AlertCode = 0x08
-	AlertVMIdentityMismatch   AlertCode = 0x09
-	AlertAuthoritySigFailed   AlertCode = 0x0A
-	AlertPolicyRefused        AlertCode = 0x0B
+	AlertNone               AlertCode = 0x00 // reserved
+	AlertDecodeError        AlertCode = 0x01
+	AlertUnsupportedSuite   AlertCode = 0x02
+	AlertAuthFailed         AlertCode = 0x03
+	AlertReplayDetected     AlertCode = 0x04
+	AlertDowngradeRefused   AlertCode = 0x05
+	AlertHandshakeTimeout   AlertCode = 0x06
+	AlertNonceViolation     AlertCode = 0x07
+	AlertPSKUnknown         AlertCode = 0x08
+	AlertVMIdentityMismatch AlertCode = 0x09
+	AlertAuthoritySigFailed AlertCode = 0x0A
+	AlertPolicyRefused      AlertCode = 0x0B
 )
 
 // String returns the canonical §14 name. Audit pipelines match on

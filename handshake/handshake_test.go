@@ -30,11 +30,11 @@ func TestFullHandshakeAndEcho(t *testing.T) {
 	}
 
 	var (
-		wg          sync.WaitGroup
-		clientSess  *Session
-		clientErr   error
-		serverSess  *Session
-		serverErr   error
+		wg         sync.WaitGroup
+		clientSess *Session
+		clientErr  error
+		serverSess *Session
+		serverErr  error
 	)
 	wg.Add(2)
 
@@ -230,7 +230,11 @@ func TestHandshakeStrictPQRefusesClassicalOffer(t *testing.T) {
 	}
 }
 
-func errIsVMIdentity(err error) bool { return bytes.Contains([]byte(err.Error()), []byte("vm_identity_mismatch")) }
-func errIsDowngrade(err error) bool  { return bytes.Contains([]byte(err.Error()), []byte("downgrade_refused")) }
+func errIsVMIdentity(err error) bool {
+	return bytes.Contains([]byte(err.Error()), []byte("vm_identity_mismatch"))
+}
+func errIsDowngrade(err error) bool {
+	return bytes.Contains([]byte(err.Error()), []byte("downgrade_refused"))
+}
 
 func errfmt(format string, args ...any) error { return fmt.Errorf(format, args...) }

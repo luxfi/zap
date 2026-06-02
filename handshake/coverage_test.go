@@ -261,7 +261,7 @@ func TestCoverage_FrameBufBucketOverflow(t *testing.T) {
 		}
 	}
 	// Force the overflow branch.
-	if frameBufBucket(1 << 30) >= 0 {
+	if frameBufBucket(1<<30) >= 0 {
 		t.Fatal("frameBufBucket should return -1 for huge sizes")
 	}
 	bufP := getFrameBuf(1 << 30)

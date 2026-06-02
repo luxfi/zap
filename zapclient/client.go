@@ -111,15 +111,15 @@ func WithPicker(p Picker) ClientOption {
 // Client is a native ZAP RPC client. Created by Connect; closed by
 // Close (or returned stop function from MustConnect).
 type Client struct {
-	node      *zap.Node
-	disc      Discovery
-	picker    Picker
-	timeout   time.Duration
-	logger    *slog.Logger
+	node    *zap.Node
+	disc    Discovery
+	picker  Picker
+	timeout time.Duration
+	logger  *slog.Logger
 
-	mu         sync.Mutex
-	closed     bool
-	stopDisc   func()
+	mu       sync.Mutex
+	closed   bool
+	stopDisc func()
 }
 
 // Connect resolves a service via Discovery and returns a Client.
@@ -336,10 +336,10 @@ func (nd nodeDiscovery) Peers() []Peer {
 	return out
 }
 
-func (nd nodeDiscovery) PeerCount() int     { return len(nd.n.Peers()) }
+func (nd nodeDiscovery) PeerCount() int      { return len(nd.n.Peers()) }
 func (nd nodeDiscovery) ServiceType() string { return nd.serviceType }
 func (nd nodeDiscovery) Start() error        { return nil } // Node already started it
-func (nd nodeDiscovery) Stop()               {}              // Node.Stop handles it
+func (nd nodeDiscovery) Stop()               {}             // Node.Stop handles it
 
 // compile-time: RoundRobinPicker satisfies Picker; the *Client uses it.
 var _ Picker = (*RoundRobinPicker)(nil)

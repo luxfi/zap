@@ -5,15 +5,15 @@
 //
 // Three transports are implemented:
 //
-//   default — standard Go net (CPU parsing). Always available.
-//   uma     — Apple Silicon / NVIDIA Grace unified-memory. cgo + darwin.
-//             Network packets land in shared RAM; GPU kernels read them
-//             at GPU memory speed without a copy.
-//   gpudirect — NVIDIA + Mellanox CX-6/7 (GPUDirect RDMA). cgo + linux.
-//             NIC DMA into VRAM, ZAP parsed by GPU kernel, no CPU touch.
-//   dpdk    — Linux DPDK + GPU-mapped hugepages. cgo + linux.
-//             Kernel-bypass packet ingestion, GPU reads from mapped huge-
-//             pages. Best for non-Mellanox NICs.
+//	default — standard Go net (CPU parsing). Always available.
+//	uma     — Apple Silicon / NVIDIA Grace unified-memory. cgo + darwin.
+//	          Network packets land in shared RAM; GPU kernels read them
+//	          at GPU memory speed without a copy.
+//	gpudirect — NVIDIA + Mellanox CX-6/7 (GPUDirect RDMA). cgo + linux.
+//	          NIC DMA into VRAM, ZAP parsed by GPU kernel, no CPU touch.
+//	dpdk    — Linux DPDK + GPU-mapped hugepages. cgo + linux.
+//	          Kernel-bypass packet ingestion, GPU reads from mapped huge-
+//	          pages. Best for non-Mellanox NICs.
 //
 // All four implement the same Transport interface. Pick() chooses the
 // best available implementation at runtime, honoring a caller-supplied

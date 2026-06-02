@@ -39,10 +39,10 @@ type Transcript struct {
 type transcriptStage uint8
 
 const (
-	stageNew      transcriptStage = iota // before AbsorbHello
-	stageH0                              // after AbsorbHello
-	stageH1                              // after AbsorbKEM
-	stageH2                              // after FinishFull / FinishPSK
+	stageNew transcriptStage = iota // before AbsorbHello
+	stageH0                         // after AbsorbHello
+	stageH1                         // after AbsorbKEM
+	stageH2                         // after FinishFull / FinishPSK
 )
 
 // NewTranscript creates a transcript pinned to the supplied suite. The
