@@ -481,6 +481,88 @@ func TestRedRound2_HIGH1_UncappedListLength(t *testing.T) {
 	}
 }
 
+// TestNewV1_ListStrideTighterClamp pins the per-element-stride clamp
+// (NEW-V1 follow-up, LP-023 Red round 3). A poisoned length field that
+// passes the permissive `length <= len(data)` baseline at stride 0 gets
+// rejected at the tighter `length*stride <= bufRem` bound when the caller
+// passes the correct minStride. We craft the buffer so the poisoned
+// length satisfies `length <= len(data)` (bare List accepts) but
+// `length * 4 > bufRem` (ListStride rejects).
+func TestNewV1_ListStrideTighterClamp(t *testing.T) {
+	b := NewBuilder(512)
+	lb := b.StartList(4)
+	for i := 0; i < 32; i++ {
+		lb.AddUint32(uint32(i))
+	}
+	listOff, listLen := lb.Finish()
+	ob := b.StartObject(8)
+	ob.SetList(0, listOff, listLen)
+	ob.FinishAsRoot()
+	buf := b.Finish()
+
+	rootOffset := int(binary.LittleEndian.Uint32(buf[8:12]))
+	// Poison length: pick L such that L <= len(buf) (bare passes) but
+	// L*4 > bufRem after absOffset (ListStride rejects). len(buf) ~ 200.
+	// Bare clamp: int(length) > len(o.msg.data) → reject. So we need
+	// length <= len(buf). bufRem after list start is ~ len(buf) - absOffset
+	// (~70). 4 * 100 = 400 > 70 — easy reject. Length=100 satisfies bare
+	// (100 <= 200) but fails stride*length (400 > 70).
+	binary.LittleEndian.PutUint32(buf[rootOffset+4:], 100)
+
+	msg, err := Parse(buf)
+	if err != nil {
+		t.Fatalf("Parse rejected: %v", err)
+	}
+
+	// Bare List() accepts length=100 since 100 <= len(buf) (~200).
+	bareList := msg.Root().List(0)
+	if bareList.Len() != 100 {
+		t.Fatalf("bare List() expected len=100 (permissive baseline), got %d (len(buf)=%d)", bareList.Len(), len(buf))
+	}
+
+	// ListStride(0, 4) rejects: 100 * 4 = 400 > bufRem (~70).
+	stridedList := msg.Root().ListStride(0, 4)
+	if !stridedList.IsNull() {
+		t.Fatalf("ListStride(0, 4) regression: poisoned length=100 stride=4 not rejected; Len()=%d", stridedList.Len())
+	}
+}
+
+// TestNewV1_ListStrideAcceptsHonestLength pins the false-positive guard:
+// honest lists with stride and length matching buffer must pass the
+// tighter clamp.
+func TestNewV1_ListStrideAcceptsHonestLength(t *testing.T) {
+	b := NewBuilder(256)
+	lb := b.StartList(4)
+	for i := 0; i < 5; i++ {
+		lb.AddUint32(uint32(0xAA00 + i))
+	}
+	listOff, listLen := lb.Finish()
+	ob := b.StartObject(8)
+	ob.SetList(0, listOff, listLen)
+	ob.FinishAsRoot()
+	buf := b.Finish()
+
+	msg, err := Parse(buf)
+	if err != nil {
+		t.Fatalf("Parse rejected: %v", err)
+	}
+
+	list := msg.Root().ListStride(0, 4)
+	if list.IsNull() {
+		t.Fatalf("ListStride rejected honest length=5 stride=4 buffer")
+	}
+	if list.Len() != 5 {
+		t.Fatalf("ListStride Len()=%d want 5", list.Len())
+	}
+	for i := 0; i < 5; i++ {
+		got := list.Uint32(i)
+		want := uint32(0xAA00 + i)
+		if got != want {
+			t.Errorf("element %d: got %x want %x", i, got, want)
+		}
+	}
+}
+
 // TestRedRound2_HIGH2_BackwardListPointer pins the Red repro:
 // craft a List with relOffset that, under signed decoding, points into the
 // wire header (Magic bytes). After the fix, Object.List returns an empty

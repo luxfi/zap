@@ -371,6 +371,61 @@ func (o Object) List(fieldOffset int) List {
 	return List{msg: o.msg, offset: absOffset, length: int(length)}
 }
 
+// ListStride is List() with a caller-supplied per-element stride hint. It
+// applies the tighter clamp `length * minStride <= len(buffer) - absOffset`
+// up front, rejecting attacker-set length=0xFFFFFFFF on multi-byte-stride
+// accessors instead of pushing the bounds check to every per-element
+// accessor.
+//
+// Use case: an Uint32 list with stride 4, a struct list with stride 96 — pass
+// the stride; the wire layer rejects length values that exceed what the
+// remaining buffer can possibly carry. This is a NEW-V1 follow-up (LP-023
+// Red round 3) — the bare List() accessor cannot know the stride and uses
+// the permissive `length <= len(data)` baseline.
+//
+// minStride MUST be the BYTE width of one element (1 for uint8, 4 for
+// uint32, 8 for uint64, SizeTransferableOutput for OutputList, etc.). When
+// minStride <= 0 the call falls back to bare List() semantics.
+//
+// Wire format is unchanged — same {relOffset, length} pair as List(). The
+// clamp is purely a tightened acceptance test; any List() that would
+// succeed with minStride=0 succeeds with the correct stride too.
+func (o Object) ListStride(fieldOffset int, minStride uint32) List {
+	pos := o.offset + fieldOffset
+	if pos+8 > len(o.msg.data) {
+		return List{}
+	}
+
+	relOffset := int32(binary.LittleEndian.Uint32(o.msg.data[pos:]))
+	if relOffset == 0 {
+		return List{} // Null
+	}
+
+	length := binary.LittleEndian.Uint32(o.msg.data[pos+4:])
+
+	absOffset := pos + int(relOffset)
+	if absOffset < HeaderSize || absOffset >= len(o.msg.data) {
+		return List{}
+	}
+
+	// Tighter clamp using per-element stride: `length * minStride` must fit
+	// in the remaining buffer after absOffset. This rejects 0xFFFFFFFF DoS
+	// on any stride > 1 immediately, instead of waiting for per-element
+	// access bounds checks. Length<=msgsize baseline (RED-HIGH-1) is also
+	// applied for stride=0 (or unspecified caller).
+	bufRem := uint64(len(o.msg.data) - absOffset)
+	if minStride > 0 {
+		// uint64 product cannot overflow because both operands are uint32.
+		if uint64(length)*uint64(minStride) > bufRem {
+			return List{}
+		}
+	} else if uint64(length) > uint64(len(o.msg.data)) {
+		return List{}
+	}
+
+	return List{msg: o.msg, offset: absOffset, length: int(length)}
+}
+
 // List is a zero-copy view into a ZAP list.
 type List struct {
 	msg    *Message
@@ -378,7 +433,18 @@ type List struct {
 	length int
 }
 
-// Len returns the number of elements.
+// Len returns the list element count as encoded on the wire.
+//
+// SAFETY: callers MUST NOT pre-allocate via make([]T, l.Len()) without an
+// independent bound. The wire encoding only constrains length to len(buffer),
+// so a 64KB mempool tx can carry Len()=65535 — large enough to OOM if a
+// consumer naively pre-allocates. Always iterate List.At(i) with i < Len()
+// AND validate each element's invariants before trusting the count.
+//
+// For tighter per-stride bounds at the wire layer, use Object.ListStride
+// (introduced in v0.7.2): it rejects length*minStride > len(buffer) up
+// front. This Len() value is the wire-encoded count irrespective of which
+// accessor produced the List — Object.List or Object.ListStride.
 func (l List) Len() int {
 	return l.length
 }
