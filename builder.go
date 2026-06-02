@@ -15,8 +15,22 @@ type Builder struct {
 	rootOffset int
 }
 
-// NewBuilder creates a new builder with the given initial capacity.
+// NewBuilder creates a new builder with the given initial capacity. The
+// resulting message is emitted with Version2 in the wire header (the
+// current default). Use NewBuilderV1 only for legacy v1 emitters; new
+// code should always use NewBuilder.
 func NewBuilder(capacity int) *Builder {
+	return newBuilder(capacity, Version2)
+}
+
+// NewBuilderV1 creates a new builder that emits Version1 messages. This is
+// kept only for explicit-legacy-emitter call sites (none in tree as of
+// LP-023 v3.1 round 2). New code should call NewBuilder.
+func NewBuilderV1(capacity int) *Builder {
+	return newBuilder(capacity, Version1)
+}
+
+func newBuilder(capacity int, version uint16) *Builder {
 	if capacity < HeaderSize {
 		capacity = 256
 	}
@@ -26,7 +40,7 @@ func NewBuilder(capacity int) *Builder {
 	}
 	// Write magic and version
 	copy(b.buf[0:4], Magic)
-	binary.LittleEndian.PutUint16(b.buf[4:6], Version)
+	binary.LittleEndian.PutUint16(b.buf[4:6], version)
 	return b
 }
 

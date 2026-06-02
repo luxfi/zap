@@ -53,7 +53,7 @@ fmt.Println(root.Bool(16))    // true
 ┌─────────────────────────────────────────────────┐
 │ Header (16 bytes)                               │
 │  ├─ Magic (4 bytes): "ZAP\x00"                  │
-│  ├─ Version (2 bytes): 1                        │
+│  ├─ Version (2 bytes): 1 (legacy) or 2 (current)│
 │  ├─ Flags (2 bytes): compression, etc.          │
 │  ├─ Root Offset (4 bytes): offset to root       │
 │  └─ Size (4 bytes): total message size          │

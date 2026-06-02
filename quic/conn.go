@@ -81,7 +81,7 @@ type Conn struct {
 
 	qc      *quicgo.Conn
 	control *quicgo.Stream // bidirectional control stream
-	ctrlMu  sync.Mutex      // serializes writes on `control`
+	ctrlMu  sync.Mutex     // serializes writes on `control`
 
 	closed atomic.Bool
 }
