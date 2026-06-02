@@ -9,10 +9,10 @@ import "errors"
 // path is wired. See gpudirect_linux.go for the build-tagged factory.
 //
 // Hardware required for the real impl:
-//   * NVIDIA GPU with GPUDirect RDMA support (Hopper / Ada / Ampere)
-//   * Mellanox / NVIDIA ConnectX-6+ NIC
-//   * Linux kernel with nv_peer_mem / nvidia-peermem loaded
-//   * libfabric or libibverbs build-time deps
+//   - NVIDIA GPU with GPUDirect RDMA support (Hopper / Ada / Ampere)
+//   - Mellanox / NVIDIA ConnectX-6+ NIC
+//   - Linux kernel with nv_peer_mem / nvidia-peermem loaded
+//   - libfabric or libibverbs build-time deps
 //
 // Reference architecture: NVIDIA DOCA GPUNetIO + Holoscan transport
 // layer. Packets DMA from NIC into VRAM, GPU kernel parses ZAP header

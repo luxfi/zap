@@ -53,10 +53,10 @@ type Conn struct {
 	mu     sync.Mutex
 
 	// Request/response correlation
-	reqID    uint32
-	reqIDMu  sync.Mutex
-	pending  map[uint32]chan *Message
-	pendMu   sync.Mutex
+	reqID   uint32
+	reqIDMu sync.Mutex
+	pending map[uint32]chan *Message
+	pendMu  sync.Mutex
 }
 
 // Handler handles incoming ZAP messages.
