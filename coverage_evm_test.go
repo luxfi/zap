@@ -108,13 +108,13 @@ func TestCoverage_ObjectBuilderEVMSetters(t *testing.T) {
 	}
 
 	// Out-of-bounds returns zero values / nil slices.
-	if root.Address(1 << 20) != ZeroAddress {
+	if root.Address(1<<20) != ZeroAddress {
 		t.Fatal("OOB Address should return zero")
 	}
-	if root.Hash(1 << 20) != ZeroHash {
+	if root.Hash(1<<20) != ZeroHash {
 		t.Fatal("OOB Hash should return zero")
 	}
-	if root.Signature(1 << 20) != (Signature{}) {
+	if root.Signature(1<<20) != (Signature{}) {
 		t.Fatal("OOB Signature should return zero")
 	}
 	if root.AddressSlice(1<<20) != nil {

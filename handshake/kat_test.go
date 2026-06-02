@@ -93,8 +93,8 @@ func runStaticTranscriptKAT(t *testing.T, path string) {
 // katBytes resolves a JSON input field to a []byte. Two shapes are
 // supported:
 //
-//   "field": "0xabcd..."                       -> hex string
-//   "field": {"pattern_base": "0xAA", "length": N}  -> generated pattern
+//	"field": "0xabcd..."                       -> hex string
+//	"field": {"pattern_base": "0xAA", "length": N}  -> generated pattern
 func katBytes(t *testing.T, in map[string]interface{}, name string) []byte {
 	t.Helper()
 	raw, ok := in[name]

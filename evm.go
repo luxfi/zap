@@ -241,7 +241,7 @@ var TransactionSchema = NewStructBuilder("Transaction").
 	Uint64("nonce").
 	Address("from").
 	Address("to").
-	Bytes("value").    // uint256 as bytes
+	Bytes("value"). // uint256 as bytes
 	Bytes("data").
 	Uint64("gas").
 	Bytes("gasPrice"). // uint256 as bytes

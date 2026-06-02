@@ -75,13 +75,13 @@ func TestCoverage_ObjectOOBReads(t *testing.T) {
 	msg, _ := Parse(out)
 	root := msg.Root()
 	// OOB byte offset returns 0.
-	if root.Uint8(1 << 20) != 0 {
+	if root.Uint8(1<<20) != 0 {
 		t.Fatal("OOB Uint8 should be 0")
 	}
-	if root.Uint16(1 << 20) != 0 {
+	if root.Uint16(1<<20) != 0 {
 		t.Fatal("OOB Uint16 should be 0")
 	}
-	if root.Uint32(1 << 20) != 0 {
+	if root.Uint32(1<<20) != 0 {
 		t.Fatal("OOB Uint32 should be 0")
 	}
 	if root.Bool(1 << 20) {
@@ -114,8 +114,8 @@ func TestCoverage_BuilderGrowExpansion(t *testing.T) {
 func TestCoverage_SetObjectAndSetListNull(t *testing.T) {
 	b := NewBuilder(128)
 	ob := b.StartObject(12)
-	ob.SetObject(0, 0) // null object
-	ob.SetList(4, 0, 0) // null list (offset==0)
+	ob.SetObject(0, 0)    // null object
+	ob.SetList(4, 0, 0)   // null list (offset==0)
 	ob.SetList(4, 100, 0) // null list (length==0)
 	ob.FinishAsRoot()
 	out := b.Finish()
@@ -130,4 +130,3 @@ func TestCoverage_SetObjectAndSetListNull(t *testing.T) {
 		t.Fatal("null list should be null")
 	}
 }
-

@@ -243,7 +243,6 @@ func TestCoverage_InitiatorAuthRDecodeFails(t *testing.T) {
 	}
 }
 
-
 // -------- responder full handshake replay rejection --------
 
 // TestCoverage_ResponderTimestampOutOfWindow: HELLO with timestamp
