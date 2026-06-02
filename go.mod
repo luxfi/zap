@@ -14,6 +14,7 @@ require (
 )
 
 require (
+	capnproto.org/go/capnp/v3 v3.0.1-alpha.2 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/grandcat/zeroconf v1.0.0 // indirect
 	github.com/luxfi/crypto v1.19.17
