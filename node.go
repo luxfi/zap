@@ -26,13 +26,23 @@ type Node struct {
 	noDiscovery bool
 	tlsCfg      *tls.Config // nil = plaintext
 
+	// Transport selection (cached from NodeConfig.Transport at
+	// construction). Default = TransportTCP for back-compat.
+	transport     Transport
+	transportFact TransportFactory // resolved only when transport != TCP
+	cfg           NodeConfig       // verbatim copy for transport handlers
+
 	// Discovery
 	discovery *mdns.Discovery
 
 	// Network
-	listener net.Listener
-	conns    map[string]*Conn
-	connsMu  sync.RWMutex
+	listener     net.Listener
+	transports   map[string]TransportConn // peerID -> transport conn (QUIC path)
+	transClose   func() error             // closer for the QUIC listener
+	reqIDQuic    uint32                   // QUIC-path request-ID counter
+	reqIDQuicMu  sync.Mutex
+	conns        map[string]*Conn
+	connsMu      sync.RWMutex
 
 	// Handlers
 	handlers   map[uint16]Handler
@@ -71,6 +81,17 @@ type NodeConfig struct {
 	Logger      *slog.Logger
 	NoDiscovery bool        // Disable mDNS discovery (use ConnectDirect only)
 	TLS         *tls.Config // optional PQ-TLS 1.3; nil = plaintext
+
+	// Transport selects the network transport: TransportTCP (default,
+	// preserves back-compat) or TransportQUIC. TransportQUIC requires
+	// `import _ "github.com/luxfi/zap/quic"` somewhere in the binary.
+	Transport Transport
+
+	// QUICConfig, if non-nil, is passed to the QUIC transport as a
+	// *quic.Config (github.com/quic-go/quic-go). Ignored for
+	// TransportTCP. Typed as any here to avoid pulling quic-go into
+	// the parent package's import graph.
+	QUICConfig any
 }
 
 // NewNode creates a new ZAP node.
@@ -86,7 +107,10 @@ func NewNode(cfg NodeConfig) *Node {
 		port:        cfg.Port,
 		noDiscovery: cfg.NoDiscovery,
 		tlsCfg:      cfg.TLS,
+		transport:   cfg.Transport,
+		cfg:         cfg,
 		conns:       make(map[string]*Conn),
+		transports:  make(map[string]TransportConn),
 		handlers:    make(map[uint16]Handler),
 		ctx:         ctx,
 		cancel:      cancel,
@@ -96,6 +120,9 @@ func NewNode(cfg NodeConfig) *Node {
 
 // Start starts the node (discovery + listener).
 func (n *Node) Start() error {
+	if n.transport == TransportQUIC {
+		return n.startQUIC()
+	}
 	// Start TCP listener
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", n.port))
 	if err != nil {
@@ -144,13 +171,20 @@ func (n *Node) Stop() {
 	if n.listener != nil {
 		n.listener.Close()
 	}
+	if n.transClose != nil {
+		_ = n.transClose()
+	}
 
 	// Close all connections
 	n.connsMu.Lock()
 	for _, conn := range n.conns {
 		conn.conn.Close()
 	}
+	for _, tc := range n.transports {
+		_ = tc.Close()
+	}
 	n.conns = make(map[string]*Conn)
+	n.transports = make(map[string]TransportConn)
 	n.connsMu.Unlock()
 
 	n.wg.Wait()
@@ -166,6 +200,9 @@ func (n *Node) Handle(msgType uint16, handler Handler) {
 
 // Send sends a ZAP message to a peer.
 func (n *Node) Send(ctx context.Context, peerID string, msg *Message) error {
+	if n.transport == TransportQUIC {
+		return n.quicSend(ctx, peerID, msg)
+	}
 	conn, err := n.getOrConnect(peerID)
 	if err != nil {
 		return err
@@ -184,6 +221,9 @@ const (
 
 // Call sends a request and waits for a response.
 func (n *Node) Call(ctx context.Context, peerID string, msg *Message) (*Message, error) {
+	if n.transport == TransportQUIC {
+		return n.quicCall(ctx, peerID, msg)
+	}
 	conn, err := n.getOrConnect(peerID)
 	if err != nil {
 		return nil, err
@@ -636,6 +676,9 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 
 // ConnectDirect connects directly to a peer at the given address (bypasses mDNS).
 func (n *Node) ConnectDirect(addr string) error {
+	if n.transport == TransportQUIC {
+		return n.quicConnectDirect(n.ctx, addr)
+	}
 	netConn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to connect to %s: %w", addr, err)
