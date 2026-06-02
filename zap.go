@@ -220,14 +220,21 @@ func (o Object) Text(fieldOffset int) string {
 }
 
 // Bytes reads a byte slice at the given field offset (zero-copy).
+//
+// Wire-format rule: relOffset is an UNSIGNED forward pointer from the field
+// position into the variable-section. Negative bit-patterns (high bit set)
+// flow through uint32→int conversion as large positive values and are
+// rejected by the absPos+length > len(data) bounds check. This closes the
+// memo-pointer-escape malleability surface where a signed cast would let a
+// crafted relOffset alias bytes back inside the fixed section.
 func (o Object) Bytes(fieldOffset int) []byte {
 	pos := o.offset + fieldOffset
 	if pos+4 > len(o.msg.data) {
 		return nil
 	}
 
-	// Read offset (relative) and length
-	relOffset := int32(binary.LittleEndian.Uint32(o.msg.data[pos:]))
+	// Read offset (relative, unsigned forward pointer) and length.
+	relOffset := binary.LittleEndian.Uint32(o.msg.data[pos:])
 	if relOffset == 0 {
 		return nil // Null
 	}
@@ -238,9 +245,10 @@ func (o Object) Bytes(fieldOffset int) []byte {
 	}
 	length := binary.LittleEndian.Uint32(o.msg.data[lenPos:])
 
-	// Calculate absolute position
+	// Calculate absolute position. uint32 + int may not overflow on 64-bit
+	// (Lux is 64-bit only); the bounds check below catches values past EOF.
 	absPos := pos + int(relOffset)
-	if absPos < 0 || absPos+int(length) > len(o.msg.data) {
+	if absPos+int(length) > len(o.msg.data) {
 		return nil
 	}
 
@@ -248,6 +256,11 @@ func (o Object) Bytes(fieldOffset int) []byte {
 }
 
 // Object reads a nested object at the given field offset.
+//
+// relOffset is signed: builders may emit a nested object that lives BEFORE the
+// parent's fixed section (the parent is finalized last). The bounds check at
+// the bottom rejects any absOffset outside the message; for the
+// Bytes-malleability fix see Bytes().
 func (o Object) Object(fieldOffset int) Object {
 	pos := o.offset + fieldOffset
 	if pos+4 > len(o.msg.data) {
@@ -268,6 +281,8 @@ func (o Object) Object(fieldOffset int) Object {
 }
 
 // List reads a list at the given field offset.
+//
+// relOffset is signed: see Object() for the rationale.
 func (o Object) List(fieldOffset int) List {
 	pos := o.offset + fieldOffset
 	if pos+8 > len(o.msg.data) {
