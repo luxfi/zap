@@ -112,7 +112,7 @@ type transportConnAdapter struct {
 	c *Conn
 }
 
-func (a *transportConnAdapter) Send(frame []byte) error  { return a.c.Send(frame) }
-func (a *transportConnAdapter) Recv() ([]byte, error)    { return a.c.Recv() }
-func (a *transportConnAdapter) Close() error             { return a.c.Close() }
-func (a *transportConnAdapter) RemoteAddr() string       { return a.c.RemoteAddr.String() }
+func (a *transportConnAdapter) Send(frame []byte) error { return a.c.Send(frame) }
+func (a *transportConnAdapter) Recv() ([]byte, error)   { return a.c.Recv() }
+func (a *transportConnAdapter) Close() error            { return a.c.Close() }
+func (a *transportConnAdapter) RemoteAddr() string      { return a.c.RemoteAddr.String() }
