@@ -10,8 +10,8 @@
 //   - Gemini as final summarizer/arbiter
 //
 // Usage:
-//   go run main.go
 //
+//	go run main.go
 package main
 
 import (
@@ -77,9 +77,9 @@ type AgentNode struct {
 	connsMu  sync.RWMutex
 
 	// Consensus state
-	responses map[uint64]map[int]string  // queryID -> agentID -> response
-	votes     map[uint64]map[int][]int   // queryID -> agentID -> list of voters
-	summaries map[uint64]string          // queryID -> final summary
+	responses map[uint64]map[int]string // queryID -> agentID -> response
+	votes     map[uint64]map[int][]int  // queryID -> agentID -> list of voters
+	summaries map[uint64]string         // queryID -> final summary
 	mu        sync.Mutex
 
 	// Stats

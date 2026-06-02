@@ -77,10 +77,10 @@ func (b *Builder) FinishWithFlags(flags uint16) []byte {
 
 // ObjectBuilder builds a ZAP object (struct).
 type ObjectBuilder struct {
-	b          *Builder
-	startPos   int
-	dataSize   int
-	offsets    []offsetEntry
+	b        *Builder
+	startPos int
+	dataSize int
+	offsets  []offsetEntry
 }
 
 type offsetEntry struct {

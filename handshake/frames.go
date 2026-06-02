@@ -17,13 +17,13 @@ import (
 // ---------- HELLO (§6.1) ----------
 
 type HelloFrame struct {
-	Suite              SuiteID
-	PQMode             PQMode
-	ClientRandom       [ClientRandLen]byte
-	TimestampNS        uint64
-	ClientID           [IDLen]byte
-	OfferedSchemes     []SuiteID
-	StaticPKInitiator  []byte // MLDSA65PubLen
+	Suite             SuiteID
+	PQMode            PQMode
+	ClientRandom      [ClientRandLen]byte
+	TimestampNS       uint64
+	ClientID          [IDLen]byte
+	OfferedSchemes    []SuiteID
+	StaticPKInitiator []byte // MLDSA65PubLen
 }
 
 // Encode returns the wire-encoded HELLO body (no outer type/length).

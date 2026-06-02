@@ -19,10 +19,10 @@ import (
 // failingRW returns a configurable error on Read or Write at a
 // specific byte offset.
 type failingRW struct {
-	mu        sync.Mutex
-	written   int
-	failAt    int
-	failErr   error
+	mu         sync.Mutex
+	written    int
+	failAt     int
+	failErr    error
 	underlying io.ReadWriter
 }
 
@@ -206,7 +206,7 @@ func TestCoverage_SessionRecvMalformedRekey(t *testing.T) {
 // emptyRW returns io.EOF on every Read; Write succeeds (discards).
 type emptyRW struct{}
 
-func (emptyRW) Read([]byte) (int, error)  { return 0, io.EOF }
+func (emptyRW) Read([]byte) (int, error)    { return 0, io.EOF }
 func (emptyRW) Write(p []byte) (int, error) { return len(p), nil }
 
 // bufRW combines an io.Reader and io.Writer.

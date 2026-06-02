@@ -138,7 +138,12 @@ func TestAsPQConnRejectsLegacy(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer ln.Close()
-	go func() { c, _ := ln.Accept(); if c != nil { c.Close() } }()
+	go func() {
+		c, _ := ln.Accept()
+		if c != nil {
+			c.Close()
+		}
+	}()
 	plain, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
