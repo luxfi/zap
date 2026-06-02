@@ -4,6 +4,7 @@
 package zap
 
 import (
+	"encoding/binary"
 	"testing"
 )
 
@@ -292,6 +293,76 @@ func TestBufferTooSmall(t *testing.T) {
 	_, err := Parse([]byte{1, 2, 3})
 	if err != ErrBufferTooSmall {
 		t.Errorf("expected ErrBufferTooSmall, got %v", err)
+	}
+}
+
+// TestBytesNegativeRelOffsetRejected pins the F1 fix: Object.Bytes treats the
+// relative offset as an UNSIGNED forward pointer. A bit-pattern that previously
+// sign-extended to a negative int32 (e.g. 0xFFFFFFE0 → -32) must now flow
+// through uint32→int as a very large positive value and be caught by the
+// absPos+length > size bounds check.
+//
+// Background: SetBytes always defers payload writing to ObjectBuilder.Finish,
+// which writes after the fixed section — the resulting relOffset is always a
+// positive forward pointer. Object/List offsets, by contrast, may legitimately
+// be negative because builders can finalize a nested object/list BEFORE the
+// outer object (TestList, TestNestedObject). Therefore Bytes is uniquely safe
+// to reject negative relOffsets at parse time; Object/List keep the signed
+// decoding.
+//
+// Without this fix an attacker crafts a buffer where a Bytes field's relOffset
+// points BACK into the fixed section and aliases bytes that were never
+// intended to be returned as Bytes content — a transaction-malleability
+// surface the moment a hash(buffer) TxID is wired up.
+func TestBytesNegativeRelOffsetRejected(t *testing.T) {
+	// Build a minimal object with one fixed uint32 field at offset 0 and one
+	// Bytes field at offset 4 (rel-offset + length = 8 bytes).
+	b := NewBuilder(128)
+	ob := b.StartObject(12)
+	ob.SetUint32(0, 0xDEADBEEF)
+	ob.SetBytes(4, []byte("hello"))
+	ob.FinishAsRoot()
+	buf := b.Finish()
+
+	// Locate the bytes-field's relOffset cell and rewrite it to a sign-extended
+	// negative bit-pattern. Under the old signed-int32 cast, this would alias
+	// bytes BACKWARD into the fixed-section payload; under the F1 fix, the
+	// unsigned cast bubbles to the absPos > len(data) check → return nil.
+	rootOffset := int(binary.LittleEndian.Uint32(buf[8:12]))
+	bytesFieldPos := rootOffset + 4
+	// 0xFFFFFFE0 = -32 if sign-extended.
+	binary.LittleEndian.PutUint32(buf[bytesFieldPos:], 0xFFFFFFE0)
+
+	msg, err := Parse(buf)
+	if err != nil {
+		t.Fatalf("Parse rejected mutated buffer (unexpected): %v", err)
+	}
+	got := msg.Root().Bytes(4)
+	if got != nil {
+		t.Fatalf("Bytes() returned %x on negative-relOffset buffer; want nil (F1 regression)", got)
+	}
+}
+
+// TestBytesMaxUintRelOffsetRejected covers the wraparound side of the F1 fix:
+// a relOffset of 0xFFFFFFFF flows through uint32→int as ~4 GiB, far past any
+// realistic message size; the bounds check returns nil.
+func TestBytesMaxUintRelOffsetRejected(t *testing.T) {
+	b := NewBuilder(128)
+	ob := b.StartObject(12)
+	ob.SetBytes(4, []byte("hello"))
+	ob.FinishAsRoot()
+	buf := b.Finish()
+
+	rootOffset := int(binary.LittleEndian.Uint32(buf[8:12]))
+	binary.LittleEndian.PutUint32(buf[rootOffset+4:], 0xFFFFFFFF)
+
+	msg, err := Parse(buf)
+	if err != nil {
+		t.Fatalf("Parse rejected mutated buffer: %v", err)
+	}
+	got := msg.Root().Bytes(4)
+	if got != nil {
+		t.Fatalf("Bytes() returned %x; want nil on MaxUint32 relOffset", got)
 	}
 }
 
