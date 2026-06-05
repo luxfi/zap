@@ -1,0 +1,34 @@
+{
+  "lp": "lp-208",
+  "description": "DAG mempool — header + body (LP-208 §Wire schemas). Schema IDs 0xE0..0xE1 (per session handoff override; LP-208 file still shows 0xF0..0xF1 and needs to be updated to match).",
+  "schemas": [
+    {
+      "wire_name": "DAGHeader",
+      "go_name":   "DAGHeaderSchema",
+      "kind":      "0xE0",
+      "size":      69,
+      "package":   "dagwire",
+      "out":       "lp-208/dag_header_zap.go",
+      "fields": [
+        { "name": "Round",          "type": "uint64",  "offset": 1  },
+        { "name": "AuthorNodeID",   "type": "bytes20", "offset": 9  },
+        { "name": "BodyHash",       "type": "bytes32", "offset": 29 },
+        { "name": "ParentHashesOff","type": "uint32",  "offset": 61 },
+        { "name": "WitnessOff",     "type": "uint32",  "offset": 65 }
+      ]
+    },
+    {
+      "wire_name": "DAGBody",
+      "go_name":   "DAGBodySchema",
+      "kind":      "0xE1",
+      "size":      45,
+      "package":   "dagwire",
+      "out":       "lp-208/dag_body_zap.go",
+      "fields": [
+        { "name": "Round",      "type": "uint64",  "offset": 1  },
+        { "name": "BatchHash",  "type": "bytes32", "offset": 9  },
+        { "name": "TxBytesOff", "type": "uint32",  "offset": 41 }
+      ]
+    }
+  ]
+}

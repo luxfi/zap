@@ -35,6 +35,10 @@ func newDefault() Transport {
 
 func (t *defaultTransport) Name() string { return "default" }
 
+func (t *defaultTransport) Caps() Capabilities {
+	return Capabilities{GPUResident: false, ZeroCopy: false, MinLatencyMicros: 50}
+}
+
 func (t *defaultTransport) Send(ctx context.Context, peer string, msg []byte) error {
 	t.mu.Lock()
 	if t.closed {

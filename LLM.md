@@ -71,3 +71,102 @@ The QUIC transport adds, beyond what TCP+TLS gives:
 
 See `quic/README.md` for details, defaults, deployment notes, and the
 threat-model discussion.
+
+### GPU-aware `transport/` subpackage (LP-203 zero-copy)
+
+`github.com/luxfi/zap/transport` registers four implementations behind
+the same `Transport` interface:
+
+| Name        | Build tags                          | Wire           | GPU-resident bytes |
+|-------------|-------------------------------------|----------------|--------------------|
+| `default`   | always                              | in-proc / TCP  | no                 |
+| `uma`       | `cgo,linux,cuda` or `cgo,darwin`    | NIC → managed  | yes (cudaMallocManaged on linux, MTLBuffer on darwin) |
+| `gpudirect` | `cgo,linux,gpudirect,cuda`          | NIC → GPU VRAM | yes (DMA-buf MR)   |
+| `dpdk`      | `cgo,linux,dpdk` + `pkg-config libdpdk` | NIC poll loop | no (CPU hugepage)  |
+
+`transport.Pick("")` selects in order `gpudirect > dpdk > uma >
+default`. An operator override via `ZAP_TRANSPORT={default,uma,gpudirect,
+dpdk}` returns ErrNotAvailable on a host that can't provide it (no
+silent fallback when the operator was explicit).
+
+Transports that can hand out GPU-resident buffers also implement
+`BufferAllocator`:
+
+```go
+tr, _ := transport.Pick("uma")
+alloc, ok := tr.(transport.BufferAllocator)
+if !ok { /* default transport — heap allocate */ }
+buf, _ := alloc.AllocBuffer(1 << 20)        // 1 MiB managed slab
+copy(buf.Bytes(), payload)                  // CPU writes
+gpuKernel.launch(buf.DevicePtr(), 1<<20)    // GPU reads same bytes
+buf.Release()                                // back to slab pool
+```
+
+UMA pool is slab-allocated (`slabClasses = 256B, 1KiB, 4KiB, 16KiB,
+64KiB, 1MiB`). Pool budget defaults to 4 GiB via `ZAP_UMA_POOL_BYTES`.
+Sizes above 1 MiB take a cold-path `cudaMallocManaged` per call.
+
+Boot emits one `slog.Info` line listing the chosen transport + probe
+errors for the others. Silence with `ZAP_TRANSPORT_QUIET=1`.
+
+Probe gaps are reported honestly: on a host with libibverbs but no
+Mellanox HCA visible, `Pick("gpudirect")` returns
+`missing prereq(s): [ibverbs-device raw-packet-cap nvidia-peermem]`
+— never a fake success.
+
+### Read-buffer pool (bufpool.go)
+
+The TCP dispatch read path sources frame buffers from a quantized
+`sync.Pool` (`64B / 256B / 1 KiB / 4 KiB / 16 KiB / 64 KiB`) via
+`readMessageRawPooled` + refcounted `*bufRef`. `Message` carries an
+optional `refs *bufRef`; `Message.Release()` decrements the refcount
+and (at zero) returns the slab. `Message.Retain()` extends lifetime
+across goroutine boundaries (e.g. when a Call response is delivered
+via channel).
+
+Wire format is byte-identical — only the buffer lifecycle changed.
+Frames over 64 KiB fall back to a one-off heap alloc transparent to
+the caller. `Message.Release()` on a Builder-built or unpooled
+message is a no-op so existing callers keep working unmodified.
+
+Read benchmarks (Apple M1 Max, `go test -bench='BenchmarkRead'
+-benchtime=2s -count=2`):
+
+| Size  | Legacy ns/op | Pooled ns/op | Speedup | Allocs (legacy → pooled) |
+|-------|--------------|--------------|---------|--------------------------|
+| 64B   | 38           | 40           | 1.0x    | 2 → 1, 68 → 4 B/op       |
+| 256B  | 68           | 43           | 1.6x    | 2 → 1, 260 → 4 B/op      |
+| 1KB   | 284          | 54           | 5.3x    | 2 → 1, 1028 → 4 B/op     |
+| 4KB   | 716          | 125          | 5.7x    | 2 → 1, 4100 → 4 B/op     |
+| 16KB  | 2244         | 355          | 6.3x    | 2 → 1, 16388 → 4 B/op    |
+| 64KB  | 4802         | 1142         | 4.2x    | 2 → 1, 65540 → 4 B/op    |
+
+### Per-Call QUIC streams (TransportStreamer)
+
+`Node.Call` over QUIC opens a fresh per-Call bidirectional stream via
+`TransportStreamer.OpenCallStream` instead of serializing on the
+shared control stream's `ctrlMu`. The server-side `acceptCallStreams`
+goroutine spawns one handler goroutine per accepted stream so
+concurrent Calls execute in parallel up to QUIC's stream limit (1024
+by default).
+
+Wire format on each per-Call stream is one length-prefixed ZAP frame
+in each direction — no correlation header needed since each stream
+carries exactly one request + one response. Byte-identical with the
+control-stream Call format minus the 8-byte `(reqID, flag)` preamble.
+
+`ZAP_DISABLE_CALL_STREAMS=1` reverts to the legacy serialized path
+for A/B benchmarking. Production must leave it unset.
+
+End-to-end Call throughput (2 ms simulated handler):
+
+| Concurrency | Per-stream  | Serialized  | Speedup |
+|-------------|-------------|-------------|---------|
+| 1 worker    | 3.19 ms/op  | 3.17 ms/op  | 1.0x    |
+| 10 workers  | 1.24 ms/op  | 3.01 ms/op  | 2.4x    |
+| 100 workers | 1.06 ms/op  | 3.01 ms/op  | 2.85x   |
+
+The serialized path plateaus at the handler latency since every Call
+waits for the prior one to clear the control stream. Per-stream
+overlaps handlers in flight (peak inflight = 32 observed in
+`TestQUICCallConcurrent`).
