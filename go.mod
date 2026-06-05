@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/luxfi/mdns v0.1.1
 	github.com/luxfi/pq v1.0.3
+	github.com/quic-go/quic-go v0.59.1
 	golang.org/x/crypto v0.52.0
 )
 

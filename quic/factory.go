@@ -105,9 +105,14 @@ func (f *factory) Dial(ctx context.Context, cfg zap.NodeConfig, addr string) (st
 	return c.PeerID, &transportConnAdapter{c: c}, nil
 }
 
-// transportConnAdapter wraps a *Conn so it satisfies
-// zap.TransportConn (which is an interface defined in the parent
-// package, deliberately without any quic-go types).
+// transportConnAdapter wraps a *Conn so it satisfies both
+// zap.TransportConn and zap.TransportStreamer (the latter unlocks
+// per-Call streams on the QUIC fast path).
+//
+// The TransportStreamer methods (OpenCallStream / AcceptCallStream)
+// route to *Conn.OpenStream and *Conn.AcceptStream — each return
+// a *Stream which already implements WriteFrame / ReadFrame / Close
+// at the same wire format as the control-stream frames.
 type transportConnAdapter struct {
 	c *Conn
 }
@@ -116,3 +121,24 @@ func (a *transportConnAdapter) Send(frame []byte) error { return a.c.Send(frame)
 func (a *transportConnAdapter) Recv() ([]byte, error)   { return a.c.Recv() }
 func (a *transportConnAdapter) Close() error            { return a.c.Close() }
 func (a *transportConnAdapter) RemoteAddr() string      { return a.c.RemoteAddr.String() }
+
+// OpenCallStream opens a fresh QUIC bidirectional stream for one
+// request/response Call. The returned *Stream wraps quic-go's per-
+// stream flow control.
+func (a *transportConnAdapter) OpenCallStream(ctx context.Context) (zap.TransportStream, error) {
+	s, err := a.c.OpenStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// AcceptCallStream blocks until the peer opens a new bidirectional
+// stream and returns it ready for ReadFrame.
+func (a *transportConnAdapter) AcceptCallStream(ctx context.Context) (zap.TransportStream, error) {
+	s, err := a.c.AcceptStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
