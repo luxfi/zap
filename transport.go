@@ -91,6 +91,43 @@ type TransportConn interface {
 	RemoteAddr() string
 }
 
+// TransportStreamer is an optional capability extension to
+// TransportConn for transports that natively multiplex independent
+// bidirectional streams (notably QUIC). When a TransportConn also
+// implements TransportStreamer, Node.Call routes each request onto a
+// fresh per-Call stream instead of serializing on the shared control
+// stream — this lets concurrent Calls progress in parallel up to the
+// peer-advertised stream limit (1024 for ZAP's QUIC config).
+//
+// TCP transport does NOT implement TransportStreamer; Node.Call
+// transparently falls back to control-stream serialization on TCP.
+type TransportStreamer interface {
+	// OpenCallStream opens a fresh bidirectional stream for a single
+	// request/response exchange. The caller writes exactly one frame
+	// (request) then reads exactly one frame (response) then closes.
+	OpenCallStream(ctx context.Context) (TransportStream, error)
+
+	// AcceptCallStream blocks until the peer opens a per-Call stream.
+	// Used by the server-side dispatch loop to fan out to handlers
+	// without blocking on a single serialized read.
+	AcceptCallStream(ctx context.Context) (TransportStream, error)
+}
+
+// TransportStream is one per-Call stream. Stream lifecycle:
+//
+//	WriteFrame(req)   // single request
+//	ReadFrame()       // single response
+//	Close()           // release stream ID back to the QUIC pool
+//
+// Both directions are length-prefixed ZAP frames identical to the
+// control-stream wire format — so byte-for-byte interop with the
+// TCP transport and with control-stream Call paths is preserved.
+type TransportStream interface {
+	WriteFrame(frame []byte) error
+	ReadFrame() ([]byte, error)
+	Close() error
+}
+
 // transportRegistry holds the registered factories, keyed by
 // Transport. Read-only after init.
 var transportRegistry = map[Transport]TransportFactory{}
