@@ -3,20 +3,28 @@
 
 package transport
 
-import "errors"
-
-// newGPUDirectStub returns the sentinel error until the GPUDirect RDMA
-// path is wired. See gpudirect_linux.go for the build-tagged factory.
+// gpudirect.go is the cross-platform doc comment for the NVIDIA
+// GPUDirect RDMA transport. The factory lives in:
 //
-// Hardware required for the real impl:
-//   - NVIDIA GPU with GPUDirect RDMA support (Hopper / Ada / Ampere)
-//   - Mellanox / NVIDIA ConnectX-6+ NIC
-//   - Linux kernel with nv_peer_mem / nvidia-peermem loaded
-//   - libfabric or libibverbs build-time deps
+//	gpudirect_linux_real.go — //go:build cgo && linux && gpudirect && cuda
+//	    Real ibverbs + nvidia-peermem probe, DMA-buf MR registration.
+//	gpudirect_linux.go      — //go:build cgo && linux && !(gpudirect && cuda)
+//	    Clean "not available" when the tags aren't set.
+//	gpudirect_other.go      — //go:build !cgo || !linux
+//	    Clean "not available" off-Linux or without cgo.
 //
-// Reference architecture: NVIDIA DOCA GPUNetIO + Holoscan transport
-// layer. Packets DMA from NIC into VRAM, GPU kernel parses ZAP header
-// in place, CPU is never touched on the receive path.
-func newGPUDirectStub() (Transport, error) {
-	return nil, errors.New("zap/transport: gpudirect not yet wired (needs NVIDIA + Mellanox CX-6+ on linux)")
-}
+// Hardware prerequisites (probed at construction; missing prereqs cause
+// a clean fall-through to the next-best transport):
+//
+//   - NVIDIA GPU with GPUDirect RDMA support (Hopper, Ada, Ampere; GB10
+//     does NOT have GPUDirect RDMA — falls through to UMA, which is fine
+//     because GB10 has UMA at the chip level via NVLink-C2C).
+//   - Mellanox / NVIDIA ConnectX-6+ HCA. Required for IBV_DEVICE_RAW_
+//     PACKET, which is the gate for putting the NIC into raw mode.
+//   - Linux kernel with nvidia_peermem module loaded (`modprobe
+//     nvidia-peermem`). Without this, ibv_reg_dmabuf_mr will fail.
+//   - libibverbs userspace (`apt install libibverbs-dev` on Ubuntu).
+//
+// Reference architecture: NVIDIA DOCA GPUNetIO + Holoscan transport.
+// Packets DMA from NIC into VRAM, GPU kernel parses ZAP header in place,
+// CPU is never touched on the receive path.

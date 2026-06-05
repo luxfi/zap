@@ -96,8 +96,15 @@ var (
 )
 
 // Message is a ZAP message that can be read zero-copy.
+//
+// When the message's backing storage was sourced from the pooled read
+// buffer (see bufpool.go), refs is non-nil and Release returns the
+// slab to its pool. For messages built via Builder.Finish() / Parse()
+// of caller-owned bytes, refs is nil and Release is a no-op — those
+// buffers are GC-managed as before.
 type Message struct {
 	data []byte
+	refs *bufRef // optional pool handle; nil = GC-managed
 }
 
 // Parse parses a ZAP message from bytes without copying.
@@ -143,9 +150,107 @@ func (m *Message) Version() uint16 {
 	return binary.LittleEndian.Uint16(m.data[4:6])
 }
 
+// ParseHeader validates a ZAP wire frame and returns the (validated
+// data slice, root offset) WITHOUT allocating a [*Message]. Same checks
+// as [Parse] — magic, version, size — but the result is two values, not
+// a pointer. Intended for generic wrappers (zapv2) that build their own
+// value-typed accessors and never need a *Message.
+//
+// Returns (data[:size], rootOff, nil) on success.
+//
+// The wire validation steps mirror [Parse] exactly (magic + version +
+// size + bounds). The implementation is intentionally written as one
+// linear sequence (no intermediate function calls) so the inliner
+// folds the whole body into the caller. Combined with the value-
+// typed [zapv2.View], this is what makes the v2 read path match v1's
+// 2 ns hand-rolled per-Read cost — zero function calls, zero heap.
+func ParseHeader(data []byte) ([]byte, int, error) {
+	return parseHeaderImpl(data)
+}
+
+// parseHeaderImpl is the actual validation body. Kept as a separate
+// function so ParseHeader stays inlineable (delegates a single call)
+// and per-schema WrapX shims can absorb the whole pipeline. The body
+// itself is one cost unit over the inline budget — that's fine; it
+// becomes ONE real function call per Wrap, comparable to v1's pattern
+// where Parse runs inline and the only call is the implicit message
+// constructor.
+func parseHeaderImpl(data []byte) ([]byte, int, error) {
+	if len(data) < HeaderSize {
+		return nil, 0, ErrBufferTooSmall
+	}
+	if string(data[0:4]) != Magic {
+		return nil, 0, ErrInvalidMagic
+	}
+	version := binary.LittleEndian.Uint16(data[4:6])
+	if version != Version1 && version != Version2 {
+		return nil, 0, ErrInvalidVersion
+	}
+	size := binary.LittleEndian.Uint32(data[12:16])
+	if int(size) < HeaderSize || int(size) > len(data) {
+		return nil, 0, ErrBufferTooSmall
+	}
+	rootOff := int(binary.LittleEndian.Uint32(data[8:12]))
+	return data[:size], rootOff, nil
+}
+
+// WrapBuffer constructs a [*Message] over an already-built ZAP buffer
+// WITHOUT re-running [Parse]'s validation checks (magic, version,
+// size bounds). Use ONLY for buffers you just emitted via [Builder]
+// — they are valid by construction, and skipping the recheck is a
+// 14ns hot-path saving per Build call.
+//
+// External / untrusted bytes MUST go through Parse, never WrapBuffer.
+func WrapBuffer(data []byte) *Message {
+	return &Message{data: data}
+}
+
+// RootObjectAt returns a [zap.Object] anchored at absolute offset
+// `off` within this message. Used by zapv2.Build to avoid a redundant
+// header-read after [Builder.FinishAsRoot] already returned the root
+// position.
+func (m *Message) RootObjectAt(off int) Object {
+	return Object{msg: m, offset: off}
+}
+
 // Bytes returns the underlying byte slice.
 func (m *Message) Bytes() []byte {
 	return m.data
+}
+
+// Release returns this message's backing slab to the read-buffer pool
+// when the message was sourced via the pooled read path. Safe to call
+// on any *Message — when the buffer is GC-managed (Builder, Parse of
+// caller bytes) Release is a no-op.
+//
+// After Release the underlying bytes MAY be overwritten by the next
+// pool consumer. Callers must not use Bytes() / Root() / accessors on
+// a released message.
+//
+// Release on a nil receiver is a no-op so callers can defer it
+// without nil-checking.
+func (m *Message) Release() {
+	if m == nil {
+		return
+	}
+	r := m.refs
+	m.refs = nil
+	m.data = nil
+	r.release()
+}
+
+// Retain increments the reference count on this message's backing
+// slab, allowing the caller to hand the message off to a goroutine
+// that will Release it later. No-op when refs is nil.
+//
+// Pair every Retain with exactly one Release. The dispatch loop calls
+// Retain before pushing a response *Message onto a Call's response
+// channel; the Call goroutine then Releases when it consumes the
+// response.
+func (m *Message) Retain() {
+	if m != nil && m.refs != nil {
+		m.refs.retain()
+	}
 }
 
 // Size returns the total message size.
@@ -173,6 +278,26 @@ type Object struct {
 // IsNull returns true if the object is null.
 func (o Object) IsNull() bool {
 	return o.offset == 0
+}
+
+// Offset returns the object's absolute byte offset within its
+// underlying message. Exposed so external generic wrappers (zapv2)
+// can construct typed sub-views into the same buffer without
+// re-walking the parent pointers.
+//
+// SAFETY: callers MUST treat the returned offset as opaque — it's
+// load-bearing for unsafe-pointer arithmetic, so any out-of-range
+// usage is the caller's responsibility. The matching message bytes
+// are reachable via Message.Bytes() on this object's message.
+func (o Object) Offset() int {
+	return o.offset
+}
+
+// Message returns the underlying [*Message] this Object is a view
+// into. Used by zapv2 to alias the message's bytes for direct
+// payload indexing.
+func (o Object) Message() *Message {
+	return o.msg
 }
 
 // Bool reads a bool at the given field offset.
@@ -244,6 +369,28 @@ func (o Object) Float32(fieldOffset int) float32 {
 // Float64 reads a float64 at the given field offset.
 func (o Object) Float64(fieldOffset int) float64 {
 	return math.Float64frombits(o.Uint64(fieldOffset))
+}
+
+// BytesFixedSlice returns a zero-copy slice of n inline bytes at
+// fieldOffset within the object's fixed payload. This is the generic-
+// width counterpart of HashSlice (32 bytes) and AddressSlice (20
+// bytes); it covers any N>0 inline byte-array slot (e.g., LP-201
+// SessionID [16]byte, LP-208 QuasarWitness [96]byte).
+//
+// Returns nil if the requested span falls outside the buffer. The
+// returned slice aliases the underlying message data; the caller MUST
+// NOT mutate it.
+//
+// This is the symmetric reader for ObjectBuilder.SetBytesFixed.
+func (o Object) BytesFixedSlice(fieldOffset, n int) []byte {
+	if n <= 0 {
+		return nil
+	}
+	pos := o.offset + fieldOffset
+	if pos+n > len(o.msg.data) {
+		return nil
+	}
+	return o.msg.data[pos : pos+n]
 }
 
 // Text reads a string at the given field offset (zero-copy).

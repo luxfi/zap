@@ -254,9 +254,11 @@ func (n *Node) Call(ctx context.Context, peerID string, msg *Message) (*Message,
 		conn.pendMu.Unlock()
 	}()
 
-	// Send wrapped request (one canonical encoder via WrapCorrelated).
+	// Send wrapped request via writeCorrelated — scatter-gather
+	// (header + body) so the body slice is never copied on the hot
+	// Call path.
 	conn.mu.Lock()
-	err = writeMessage(conn.conn, WrapCorrelated(reqID, ReqFlagReq, msg.Bytes()))
+	err = writeCorrelated(conn.conn, reqID, ReqFlagReq, msg.Bytes())
 	conn.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -409,6 +411,19 @@ func (n *Node) handleConn(netConn net.Conn) {
 // Returns when the underlying conn errors (non-timeout) or ctx is
 // cancelled. The caller is responsible for the per-connection
 // cleanup (conns-map delete, log).
+//
+// Buffer lifecycle (post pool-aware read path):
+//   - Each iteration pulls one frame into a pooled *bufRef. The frame
+//     payload is sliced (no copy) into the Message returned by Parse.
+//   - For uncorrelated frames and Call requests (ReqFlagReq), the
+//     Message is consumed inside the iteration — handler runs, response
+//     is written, and the bufRef is released before the next read.
+//   - For Call responses (ReqFlagResp), the Message is handed off to a
+//     channel the Call goroutine awaits. We Retain the ref before the
+//     send and the receiver Releases when it consumes the response.
+//
+// The result is two allocations saved per dispatch: the body slab and
+// the bufRef header (both pooled).
 func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 	for {
 		select {
@@ -418,7 +433,7 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 		}
 
 		netConn.SetReadDeadline(time.Now().Add(1 * time.Second))
-		data, err := readMessageRaw(netConn)
+		ref, err := readMessageRawPooled(netConn)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return
@@ -429,23 +444,39 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 			n.logger.Debug("Read error", "peerID", peerID, "error", err)
 			return
 		}
+		data := ref.Bytes()
 
 		if reqID, flag, body, isCall := UnwrapCorrelated(data); isCall {
 			switch flag {
 			case ReqFlagResp:
 				if msg, err := Parse(body); err == nil {
+					// Hand the slab off to the awaiting Call goroutine.
+					// Retain holds the refcount across the channel; the
+					// receiver Releases on consumption. If nobody is
+					// listening we Release here to avoid leaking.
+					attachToMessage(msg, ref)
+					ref.retain() // matched by msg.Release() at Call site
 					conn.pendMu.Lock()
-					if ch, ok := conn.pending[reqID]; ok {
+					ch, ok := conn.pending[reqID]
+					if ok {
 						select {
 						case ch <- msg:
 						default:
+							ok = false // delivery failed
 						}
 					}
 					conn.pendMu.Unlock()
+					if !ok {
+						msg.Release() // drop the retain we just took
+					}
 				}
+				// Drop our local hold; the retain above keeps the slab
+				// alive for the channel consumer.
+				ref.release()
 			case ReqFlagReq:
 				msg, err := Parse(body)
 				if err != nil {
+					ref.release()
 					continue
 				}
 				msgType := msg.Flags() >> 8
@@ -453,22 +484,28 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 				handler, ok := n.handlers[msgType]
 				n.handlersMu.RUnlock()
 				if !ok {
+					ref.release()
 					continue
 				}
 				resp, herr := handler(n.ctx, peerID, msg)
 				if herr != nil {
 					n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", herr)
+					ref.release()
 					continue
 				}
 				if resp != nil {
 					conn.mu.Lock()
-					writeErr := writeMessage(netConn, WrapCorrelated(reqID, ReqFlagResp, resp.Bytes()))
+					writeErr := writeCorrelated(netConn, reqID, ReqFlagResp, resp.Bytes())
 					conn.mu.Unlock()
 					if writeErr != nil {
 						n.logger.Debug("Write error", "peerID", peerID, "error", writeErr)
+						ref.release()
 						return
 					}
 				}
+				ref.release()
+			default:
+				ref.release()
 			}
 			continue
 		}
@@ -476,6 +513,7 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 		// Uncorrelated message — direct handler dispatch.
 		msg, err := Parse(data)
 		if err != nil {
+			ref.release()
 			continue
 		}
 		msgType := msg.Flags() >> 8
@@ -483,11 +521,13 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 		handler, ok := n.handlers[msgType]
 		n.handlersMu.RUnlock()
 		if !ok {
+			ref.release()
 			continue
 		}
 		resp, herr := handler(n.ctx, peerID, msg)
 		if herr != nil {
 			n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", herr)
+			ref.release()
 			continue
 		}
 		if resp != nil {
@@ -496,9 +536,11 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 			conn.mu.Unlock()
 			if writeErr != nil {
 				n.logger.Debug("Write error", "peerID", peerID, "error", writeErr)
+				ref.release()
 				return
 			}
 		}
+		ref.release()
 	}
 }
 
@@ -623,15 +665,19 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 			default:
 			}
 
-			// Set read deadline so we can check for context cancellation
+			// Set read deadline so we can check for context cancellation.
+			// Buffer lifecycle mirrors dispatchLoop: response frames hand
+			// off the slab to the awaiting Call goroutine via Retain;
+			// everything else releases at end of iteration.
 			netConn.SetReadDeadline(time.Now().Add(1 * time.Second))
-			data, err := readMessageRaw(netConn)
+			ref, err := readMessageRawPooled(netConn)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue
 				}
 				return
 			}
+			data := ref.Bytes()
 
 			// Check if this is a Call response (has 8-byte header with response flag)
 			if len(data) >= 8 {
@@ -641,15 +687,23 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 					reqID := binary.LittleEndian.Uint32(data[0:4])
 					msg, err := Parse(data[8:])
 					if err == nil {
+						attachToMessage(msg, ref)
+						ref.retain() // matched by msg.Release() at Call site
 						conn.pendMu.Lock()
-						if ch, ok := conn.pending[reqID]; ok {
+						ch, ok := conn.pending[reqID]
+						if ok {
 							select {
 							case ch <- msg:
 							default:
+								ok = false
 							}
 						}
 						conn.pendMu.Unlock()
+						if !ok {
+							msg.Release()
+						}
 					}
+					ref.release()
 					continue
 				}
 			}
@@ -657,6 +711,7 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 			// Regular message - use standard handler
 			msg, err := Parse(data)
 			if err != nil {
+				ref.release()
 				continue
 			}
 
@@ -668,6 +723,7 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 			if ok {
 				handler(n.ctx, peerID, msg)
 			}
+			ref.release()
 		}
 	}()
 
@@ -758,15 +814,57 @@ func (c *Conn) Recv() (*Message, error) {
 	return readMessage(c.conn)
 }
 
-// Wire format: [4 bytes length][message bytes]
+// Wire format: [4 bytes length][message bytes].
+//
+// writeMessage emits the frame using a single (*net.Buffers).WriteTo when
+// w is a *net.TCPConn — that's one writev(2) syscall instead of two Write
+// calls, and the body slice is referenced rather than copied. For other
+// writers (TLS, pipes, tests) the path falls back to two sequential writes,
+// which is correctness-equivalent.
 func writeMessage(w io.Writer, data []byte) error {
 	var lenBuf [4]byte
 	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(data)))
+
+	if tc, ok := w.(*net.TCPConn); ok {
+		bufs := net.Buffers{lenBuf[:], data}
+		_, err := bufs.WriteTo(tc)
+		return err
+	}
 
 	if _, err := w.Write(lenBuf[:]); err != nil {
 		return err
 	}
 	_, err := w.Write(data)
+	return err
+}
+
+// writeCorrelated emits a Call request/response frame without copying
+// the body buffer. Equivalent to writeMessage(w, WrapCorrelated(...)) but
+// the 8-byte correlation header is sent as a separate IO vector — for
+// TCPConn this is a single writev(2), for other writers it's three
+// sequential writes (still no body copy). This replaces the per-Call
+// allocation + copy WrapCorrelated() performs.
+//
+// reqID and flag are LE uint32 (matches WrapCorrelated wire layout).
+func writeCorrelated(w io.Writer, reqID uint32, flag uint32, body []byte) error {
+	var hdr [12]byte
+	binary.LittleEndian.PutUint32(hdr[0:4], uint32(correlatedHeaderSize+len(body)))
+	binary.LittleEndian.PutUint32(hdr[4:8], reqID)
+	binary.LittleEndian.PutUint32(hdr[8:12], flag)
+
+	if tc, ok := w.(*net.TCPConn); ok {
+		bufs := net.Buffers{hdr[:], body}
+		_, err := bufs.WriteTo(tc)
+		return err
+	}
+
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	_, err := w.Write(body)
 	return err
 }
 
@@ -795,4 +893,48 @@ func readMessageRaw(r io.Reader) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// readMessageRawPooled is the pool-aware variant of readMessageRaw.
+//
+// It reads one length-prefixed ZAP frame from r and returns a *bufRef
+// whose Bytes() slice is the payload. The slab is sourced from a
+// quantized sync.Pool — see bufpool.go for the size classes. Frames
+// larger than the largest pool class fall back to a one-off heap
+// allocation, transparent to the caller.
+//
+// Caller MUST eventually release() the *bufRef (directly, or by
+// transferring ownership to a *Message via attachToMessage and then
+// calling Message.Release()). Failure to release leaks the slab into
+// sync.Pool's GC reclaim cycle — correct but defeats the pool.
+//
+// Wire format is byte-identical to readMessageRaw. The only difference
+// is the buffer's lifecycle.
+func readMessageRawPooled(r io.Reader) (*bufRef, error) {
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+		return nil, err
+	}
+
+	length := binary.LittleEndian.Uint32(lenBuf[:])
+	if length > 10*1024*1024 { // 10MB max
+		return nil, errors.New("message too large")
+	}
+
+	ref := getBuf(int(length))
+	if _, err := io.ReadFull(r, ref.rawBuf()[:length]); err != nil {
+		ref.release()
+		return nil, err
+	}
+	return ref, nil
+}
+
+// attachToMessage stamps the *bufRef onto a *Message so that
+// Message.Release() returns the slab to the pool. Used by dispatch
+// loops that build a Message from a pooled buffer they're handing
+// off to a response channel.
+func attachToMessage(m *Message, ref *bufRef) {
+	if m != nil {
+		m.refs = ref
+	}
 }

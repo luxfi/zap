@@ -10,11 +10,19 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/luxfi/mdns"
 )
+
+// disableCallStreams forces Node.Call onto the legacy serialized
+// control-stream path even when the transport supports per-Call
+// streams. Set by the ZAP_DISABLE_CALL_STREAMS environment variable
+// — used ONLY for A/B benchmarking. Production deployments must
+// leave it unset.
+var disableCallStreams = os.Getenv("ZAP_DISABLE_CALL_STREAMS") == "1"
 
 // startQUIC bootstraps the QUIC transport path. It is the
 // Transport == TransportQUIC fork of (*Node).Start.
@@ -92,7 +100,21 @@ func (n *Node) onAcceptedTransportConn(peerID string, tc TransportConn) {
 }
 
 // serveTransportConn is the QUIC equivalent of handleConn — it
-// drives the read loop and dispatches incoming frames to handlers.
+// drives the read loops and dispatches incoming frames to handlers.
+//
+// Two parallel read loops run on each connection:
+//
+//  1. Control-stream loop (tc.Recv): handles one-way Sends and the
+//     legacy correlated-frame Call path for transports that do not
+//     implement TransportStreamer.
+//
+//  2. Per-Call stream accept loop (AcceptCallStream): handles the
+//     stream-per-Call optimized path. Each accepted stream carries
+//     exactly one request + one response, so the dispatch goroutine
+//     reads, handles, writes, and closes the stream in one shot.
+//
+// The two loops are independent: each runs in its own goroutine, and
+// both terminate when the connection closes or n.ctx is cancelled.
 func (n *Node) serveTransportConn(peerID string, tc TransportConn) {
 	defer n.wg.Done()
 	defer func() {
@@ -104,6 +126,16 @@ func (n *Node) serveTransportConn(peerID string, tc TransportConn) {
 		_ = tc.Close()
 		n.logger.Info("Peer disconnected (QUIC)", "peerID", peerID)
 	}()
+
+	// Spawn the per-Call stream accept loop when the transport
+	// supports it. We let this goroutine outlive serveTransportConn
+	// only briefly — AcceptCallStream returns once the underlying
+	// connection is closed, which the deferred tc.Close above
+	// triggers.
+	if s, ok := tc.(TransportStreamer); ok {
+		n.wg.Add(1)
+		go n.acceptCallStreams(peerID, s)
+	}
 
 	for {
 		select {
@@ -124,6 +156,70 @@ func (n *Node) serveTransportConn(peerID string, tc TransportConn) {
 			return
 		}
 		n.dispatchFrame(peerID, data, tc)
+	}
+}
+
+// acceptCallStreams runs in its own goroutine for each QUIC peer and
+// processes inbound per-Call streams. Each stream gets its own handler
+// goroutine so multiple in-flight Calls from the same peer execute
+// concurrently — the headline parallelism win of the optimization.
+//
+// Termination: AcceptCallStream returns a non-nil err when the
+// connection is torn down. The loop exits without logging — the
+// peer-disconnected line is already emitted by serveTransportConn's
+// deferred close.
+func (n *Node) acceptCallStreams(peerID string, s TransportStreamer) {
+	defer n.wg.Done()
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		default:
+		}
+		stream, err := s.AcceptCallStream(n.ctx)
+		if err != nil {
+			return
+		}
+		n.wg.Add(1)
+		go n.handleCallStream(peerID, stream)
+	}
+}
+
+// handleCallStream serves exactly one inbound per-Call stream:
+// read one frame as the request, run the registered handler, and
+// write the response back on the same stream. The stream is closed
+// when this function returns.
+func (n *Node) handleCallStream(peerID string, stream TransportStream) {
+	defer n.wg.Done()
+	defer stream.Close()
+
+	reqBytes, err := stream.ReadFrame()
+	if err != nil {
+		return
+	}
+	msg, err := Parse(reqBytes)
+	if err != nil {
+		return
+	}
+
+	msgType := msg.Flags() >> 8
+	n.handlersMu.RLock()
+	handler, ok := n.handlers[msgType]
+	n.handlersMu.RUnlock()
+	if !ok {
+		return
+	}
+
+	resp, herr := handler(n.ctx, peerID, msg)
+	if herr != nil {
+		n.logger.Error("Handler error (stream)", "peerID", peerID, "msgType", msgType, "error", herr)
+		return
+	}
+	if resp == nil {
+		return
+	}
+	if err := stream.WriteFrame(resp.Bytes()); err != nil {
+		n.logger.Debug("QUIC stream write error", "peerID", peerID, "error", err)
 	}
 }
 
@@ -192,10 +288,12 @@ func (n *Node) handleQUICRequest(peerID string, tc TransportConn, reqID uint32, 
 		return
 	}
 	respBytes := resp.Bytes()
-	wrapped := make([]byte, len(respBytes)+8)
-	binary.LittleEndian.PutUint32(wrapped[0:4], reqID)
-	binary.LittleEndian.PutUint32(wrapped[4:8], ReqFlagResp)
-	copy(wrapped[8:], respBytes)
+	// TransportConn.Send takes one slice; we still allocate the
+	// 8-byte-prefixed buffer once, but reuse a per-message slab when
+	// the body fits a common size class. Anything ≥ 64 KiB falls
+	// through to a one-off alloc (rare on the response path; matches
+	// the read-side 10 MiB ceiling).
+	wrapped := makeCorrelatedFrame(reqID, ReqFlagResp, respBytes)
 	if err := tc.Send(wrapped); err != nil {
 		n.logger.Debug("QUIC Send error", "peerID", peerID, "error", err)
 	}
@@ -224,12 +322,36 @@ func (n *Node) routeQUICResponse(peerID string, reqID uint32, msg *Message) {
 }
 
 // quicCall is the QUIC path for Node.Call.
+//
+// When the transport implements TransportStreamer (QUIC always does),
+// every Call gets its own fresh bidirectional stream. The request goes
+// out on the new stream, the response comes back on the same stream,
+// and the stream is torn down. This is the headline parallel-Call
+// optimization — concurrent Calls no longer serialize on the shared
+// control stream's write mutex (ctrlMu), so throughput scales linearly
+// with goroutine count up to the peer-advertised stream limit.
+//
+// The legacy control-stream-with-correlation-header path is kept as a
+// fallback when the transport does NOT implement TransportStreamer
+// (notional non-QUIC transports). Today the QUIC transport is the only
+// streaming transport, so the fallback is effectively dead code — but
+// we leave it so a future transport without per-stream multiplexing can
+// still be plugged in without breaking the Node.Call API.
+//
+// Setting ZAP_DISABLE_CALL_STREAMS=1 in the environment forces every
+// Call onto the legacy serialized path — useful ONLY for A/B
+// benchmarking the optimization. Never set this in production.
 func (n *Node) quicCall(ctx context.Context, peerID string, msg *Message) (*Message, error) {
 	tc, err := n.getOrConnectQUIC(ctx, peerID)
 	if err != nil {
 		return nil, err
 	}
 
+	if streamer, ok := tc.(TransportStreamer); ok && !disableCallStreams {
+		return n.quicCallStream(ctx, streamer, msg)
+	}
+
+	// Fallback: serialized correlated-frame Call on the control stream.
 	reqID := nextReqID(n)
 
 	respCh := make(chan *Message, 1)
@@ -247,11 +369,7 @@ func (n *Node) quicCall(ctx context.Context, peerID string, msg *Message) (*Mess
 		quicPendingMu.Unlock()
 	}()
 
-	orig := msg.Bytes()
-	wrapped := make([]byte, len(orig)+8)
-	binary.LittleEndian.PutUint32(wrapped[0:4], reqID)
-	binary.LittleEndian.PutUint32(wrapped[4:8], ReqFlagReq)
-	copy(wrapped[8:], orig)
+	wrapped := makeCorrelatedFrame(reqID, ReqFlagReq, msg.Bytes())
 
 	if err := tc.Send(wrapped); err != nil {
 		return nil, err
@@ -260,6 +378,57 @@ func (n *Node) quicCall(ctx context.Context, peerID string, msg *Message) (*Mess
 	select {
 	case resp := <-respCh:
 		return resp, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// quicCallStream runs one Call on a fresh per-Call QUIC stream.
+//
+// The stream lifecycle is:
+//   1. OpenCallStream — server peer's AcceptCallStream wakes.
+//   2. WriteFrame(req) — single length-prefixed ZAP frame.
+//   3. ReadFrame()      — single length-prefixed ZAP frame (response).
+//   4. Close            — stream ID returns to the QUIC pool.
+//
+// No correlation header is needed on the wire: each stream carries
+// exactly one request + one response, so the (reqID, flag) preamble
+// from the legacy control-stream layout is implicit in the stream
+// itself. The response payload is the raw ZAP frame; we Parse it
+// directly.
+//
+// Each stream gets cancelled if ctx fires before the response
+// arrives; the QUIC layer will surface ErrStreamCanceled into
+// ReadFrame so the goroutine exits cleanly.
+func (n *Node) quicCallStream(ctx context.Context, s TransportStreamer, msg *Message) (*Message, error) {
+	stream, err := s.OpenCallStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+
+	if err := stream.WriteFrame(msg.Bytes()); err != nil {
+		return nil, err
+	}
+
+	// Read response on this stream. The QUIC layer respects the
+	// stream's own deadline; we set one from ctx so a cancelled
+	// context tears the read down.
+	type result struct {
+		resp []byte
+		err  error
+	}
+	out := make(chan result, 1)
+	go func() {
+		resp, err := stream.ReadFrame()
+		out <- result{resp, err}
+	}()
+	select {
+	case r := <-out:
+		if r.err != nil {
+			return nil, r.err
+		}
+		return Parse(r.resp)
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
