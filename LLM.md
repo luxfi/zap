@@ -152,21 +152,20 @@ by default).
 
 Wire format on each per-Call stream is one length-prefixed ZAP frame
 in each direction — no correlation header needed since each stream
-carries exactly one request + one response. Byte-identical with the
-control-stream Call format minus the 8-byte `(reqID, flag)` preamble.
+carries exactly one request + one response.
 
-`ZAP_DISABLE_CALL_STREAMS=1` reverts to the legacy serialized path
-for A/B benchmarking. Production must leave it unset.
+Per-stream is the only Call path on QUIC; there is no fallback. The
+control stream carries one-way Sends only.
 
 End-to-end Call throughput (2 ms simulated handler):
 
-| Concurrency | Per-stream  | Serialized  | Speedup |
+| Concurrency | Per-stream  | Reference   | Speedup |
 |-------------|-------------|-------------|---------|
 | 1 worker    | 3.19 ms/op  | 3.17 ms/op  | 1.0x    |
 | 10 workers  | 1.24 ms/op  | 3.01 ms/op  | 2.4x    |
 | 100 workers | 1.06 ms/op  | 3.01 ms/op  | 2.85x   |
 
-The serialized path plateaus at the handler latency since every Call
-waits for the prior one to clear the control stream. Per-stream
+Reference = handler latency on a serialized control-stream path
+(pre-optimization measurement, retained for context). Per-stream
 overlaps handlers in flight (peak inflight = 32 observed in
 `TestQUICCallConcurrent`).

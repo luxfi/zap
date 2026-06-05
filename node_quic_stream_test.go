@@ -56,38 +56,6 @@ func TestQUICCallRoundTrip(t *testing.T) {
 	}
 }
 
-// TestQUICCallFallback exercises the ZAP_DISABLE_CALL_STREAMS env var
-// path. This is the legacy serialized-on-control-stream path that we
-// kept as a fallback for transports without TransportStreamer support.
-// We don't toggle the env in-process (the var is read at init time);
-// we just confirm the round-trip works through the same Node API.
-//
-// Real fallback testing happens in subprocess CI runs with the env
-// var set.
-func TestQUICCallFallback(t *testing.T) {
-	// This test is identical to RoundTrip; the fallback path is
-	// only chosen at init() so we exercise it via the env-var
-	// process boundary. Here we just confirm the API is stable.
-	srvAddr, srvNode, cliNode := newQUICTestPair(t, "srv-fb", "cli-fb")
-	defer srvNode.Stop()
-	defer cliNode.Stop()
-	srvNode.Handle(0x42, func(ctx context.Context, from string, msg *zap.Message) (*zap.Message, error) {
-		return buildEchoMessage(msg.Root().Uint64(0) + 7), nil
-	})
-	if err := cliNode.ConnectDirect(srvAddr); err != nil {
-		t.Fatalf("ConnectDirect: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	resp, err := cliNode.Call(ctx, "srv-fb", buildEchoMessage(42))
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	if got := resp.Root().Uint64(0); got != 49 {
-		t.Fatalf("response = %d, want 49", got)
-	}
-}
-
 // TestQUICCallConcurrent fans out N concurrent Calls on one QUIC
 // connection. Each Call MUST get its own stream — if they serialized
 // on a shared mutex, the handler's deliberate sleep would multiply
@@ -269,9 +237,8 @@ func waitForPeer(t *testing.T, n *zap.Node, peerID string, timeout time.Duration
 }
 
 // BenchmarkQUICCallConcurrent_1 / _10 / _100 measure how Call latency
-// scales with concurrent goroutines. With per-Call streams we expect
-// near-linear scaling; with the legacy ctrlMu serialization the rate
-// would plateau early.
+// scales with concurrent goroutines. Per-Call streams should yield
+// near-linear scaling up to the QUIC stream limit.
 func BenchmarkQUICCallConcurrent_1(b *testing.B)   { benchQUICCall(b, 1) }
 func BenchmarkQUICCallConcurrent_10(b *testing.B)  { benchQUICCall(b, 10) }
 func BenchmarkQUICCallConcurrent_100(b *testing.B) { benchQUICCall(b, 100) }
