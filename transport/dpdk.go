@@ -3,21 +3,29 @@
 
 package transport
 
-import "errors"
-
-// newDPDKStub returns the sentinel error until the DPDK + GPU-mapped
-// hugepage path is wired. See dpdk_linux.go for the build-tagged factory.
+// dpdk.go is the cross-platform doc comment for the DPDK PMD-backed
+// transport. The factory lives in:
 //
-// Hardware/software required for the real impl:
-//   - Linux kernel with hugepage support (2MB or 1GB pages)
-//   - DPDK 23.11+ build with cuda_gha or cuda_kernel mempool driver
-//   - Any DPDK-supported NIC (broader than GPUDirect's Mellanox-only)
-//   - NVIDIA GPU with CUDA Toolkit 12+
+//	dpdk_linux_real.go — //go:build cgo && linux && dpdk
+//	    Real rte_eal_init probe + EAL bring-up.
+//	dpdk_linux.go      — //go:build cgo && linux && !dpdk
+//	    Clean "not available" when the dpdk tag isn't set.
+//	dpdk_other.go      — //go:build !cgo || !linux
+//	    Clean "not available" off-Linux or without cgo.
 //
-// The real path: DPDK takes the NIC via kernel-bypass, ingests packets
-// into hugepages, cudaHostRegister maps the hugepages into CUDA-visible
-// host pinned memory, GPU kernel reads them at peer DMA speed. Slightly
-// slower than GPUDirect RDMA but supports a much wider NIC matrix.
-func newDPDKStub() (Transport, error) {
-	return nil, errors.New("zap/transport: dpdk not yet wired (needs DPDK + hugepages + CUDA on linux)")
-}
+// What DPDK buys us (vs the kernel network stack):
+//
+//   - Userspace polling instead of interrupts — sub-microsecond ack
+//     latency under load.
+//   - Hugepage-backed mempool — TLB cost amortised across the entire
+//     ring.
+//   - Lockless burst RX/TX — 100 Gbps line rate per worker thread.
+//
+// Why DPDK and not just GPUDirect: DPDK works on any modern NIC (not
+// just Mellanox). On a Liquidity validator with an Intel E810 or
+// Broadcom NetXtreme NIC, DPDK is the right path. On a DGX with a
+// CX-7, GPUDirect is the right path. UMA is the right path on Apple
+// Silicon and Grace-Hopper / GB10 (no discrete NIC↔GPU memory split).
+//
+// Pick() chooses in this order: gpudirect > dpdk > uma > default.
+// Operators force a specific transport via ZAP_TRANSPORT.

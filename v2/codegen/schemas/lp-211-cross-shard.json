@@ -1,0 +1,82 @@
+{
+  "lp": "lp-211",
+  "description": "Cross-shard atomic 2PC (LP-211 §Wire schemas). Schema IDs 0xE2..0xE7.",
+  "schemas": [
+    {
+      "wire_name": "CrossShardTxGroup",
+      "go_name":   "CrossShardTxGroupSchema",
+      "kind":      "0xE2",
+      "size":      37,
+      "package":   "shardwire",
+      "out":       "lp-211/cross_shard_tx_group_zap.go",
+      "fields": [
+        { "name": "GroupID",  "type": "bytes32", "offset": 1  },
+        { "name": "PartsOff", "type": "uint32",  "offset": 33 }
+      ]
+    },
+    {
+      "wire_name": "CrossShardDispatch",
+      "go_name":   "CrossShardDispatchSchema",
+      "kind":      "0xE3",
+      "size":      57,
+      "package":   "shardwire",
+      "out":       "lp-211/cross_shard_dispatch_zap.go",
+      "fields": [
+        { "name": "GroupID",          "type": "bytes32", "offset": 1  },
+        { "name": "CoordinatorID",    "type": "bytes20", "offset": 33 },
+        { "name": "TxGroupBytesOff",  "type": "uint32",  "offset": 53 }
+      ]
+    },
+    {
+      "wire_name": "CrossShardPrepareAck",
+      "go_name":   "CrossShardPrepareAckSchema",
+      "kind":      "0xE4",
+      "size":      73,
+      "package":   "shardwire",
+      "out":       "lp-211/cross_shard_prepare_ack_zap.go",
+      "fields": [
+        { "name": "GroupID",       "type": "bytes32", "offset": 1  },
+        { "name": "ChainID",       "type": "uint32",  "offset": 33 },
+        { "name": "StateDiffHash", "type": "bytes32", "offset": 37 },
+        { "name": "WaveCertOff",   "type": "uint32",  "offset": 69 }
+      ]
+    },
+    {
+      "wire_name": "CrossShardRefuseAck",
+      "go_name":   "CrossShardRefuseAckSchema",
+      "kind":      "0xE5",
+      "size":      38,
+      "package":   "shardwire",
+      "out":       "lp-211/cross_shard_refuse_ack_zap.go",
+      "fields": [
+        { "name": "GroupID", "type": "bytes32", "offset": 1  },
+        { "name": "ChainID", "type": "uint32",  "offset": 33 },
+        { "name": "Reason",  "type": "uint8",   "offset": 37 }
+      ]
+    },
+    {
+      "wire_name": "CrossShardCommitNotify",
+      "go_name":   "CrossShardCommitNotifySchema",
+      "kind":      "0xE6",
+      "size":      37,
+      "package":   "shardwire",
+      "out":       "lp-211/cross_shard_commit_notify_zap.go",
+      "fields": [
+        { "name": "GroupID",       "type": "bytes32", "offset": 1  },
+        { "name": "ParentCertOff", "type": "uint32",  "offset": 33 }
+      ]
+    },
+    {
+      "wire_name": "CrossShardAbortNotify",
+      "go_name":   "CrossShardAbortNotifySchema",
+      "kind":      "0xE7",
+      "size":      37,
+      "package":   "shardwire",
+      "out":       "lp-211/cross_shard_abort_notify_zap.go",
+      "fields": [
+        { "name": "GroupID",       "type": "bytes32", "offset": 1  },
+        { "name": "ParentCertOff", "type": "uint32",  "offset": 33 }
+      ]
+    }
+  ]
+}

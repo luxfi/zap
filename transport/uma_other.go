@@ -5,4 +5,10 @@
 
 package transport
 
-func newUMA() (Transport, error) { return newUMAStub() }
+import "errors"
+
+// newUMA on hosts without cgo or outside the {darwin, linux} matrix:
+// UMA is not implementable here, so Pick() must fall through.
+func newUMA() (Transport, error) {
+	return nil, errors.New("zap/transport: uma: not available on this OS/build")
+}

@@ -101,3 +101,19 @@ func UnwrapCorrelated(data []byte) (reqID uint32, flag uint32, body []byte, ok b
 	}
 	return reqID, flag, data[correlatedHeaderSize:], true
 }
+
+// makeCorrelatedFrame builds a single-slice correlation frame
+// (header + body) for transports that take []byte (notably the QUIC
+// TransportConn.Send shape). TCP callers should prefer writeCorrelated
+// which avoids the body copy entirely via scatter-gather.
+//
+// One allocation per call. A pooled variant requires the transport
+// interface to expose a "buffer consumed" callback so the slab can
+// be returned safely; that's a cross-module change and is deferred.
+func makeCorrelatedFrame(reqID uint32, flag uint32, body []byte) []byte {
+	buf := make([]byte, correlatedHeaderSize+len(body))
+	binary.LittleEndian.PutUint32(buf[0:4], reqID)
+	binary.LittleEndian.PutUint32(buf[4:8], flag)
+	copy(buf[correlatedHeaderSize:], body)
+	return buf
+}
