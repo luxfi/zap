@@ -36,13 +36,11 @@ type Node struct {
 	discovery *mdns.Discovery
 
 	// Network
-	listener    net.Listener
-	transports  map[string]TransportConn // peerID -> transport conn (QUIC path)
-	transClose  func() error             // closer for the QUIC listener
-	reqIDQuic   uint32                   // QUIC-path request-ID counter
-	reqIDQuicMu sync.Mutex
-	conns       map[string]*Conn
-	connsMu     sync.RWMutex
+	listener   net.Listener
+	transports map[string]TransportConn // peerID -> transport conn (QUIC path)
+	transClose func() error             // closer for the QUIC listener
+	conns      map[string]*Conn
+	connsMu    sync.RWMutex
 
 	// Handlers
 	handlers   map[uint16]Handler
