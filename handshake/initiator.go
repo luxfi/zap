@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"runtime"
 	"time"
 
@@ -59,6 +60,15 @@ type Initiator struct {
 func (i *Initiator) Run(conn io.ReadWriter) (*Session, error) {
 	if i.Local == nil || i.Local.PrivateKey == nil {
 		return nil, errors.New("zap-pq: initiator requires Local with private key")
+	}
+
+	// Bound the whole handshake by HandshakeTimeoutSec so a peer that
+	// connects and then stalls (or dribbles bytes) cannot pin this goroutine
+	// and FD indefinitely. Applies only when conn is a net.Conn; callers
+	// passing a bare io.ReadWriter remain responsible for their own timeout.
+	if nc, ok := conn.(net.Conn); ok {
+		_ = nc.SetReadDeadline(time.Now().Add(HandshakeTimeoutSec * time.Second))
+		defer func() { _ = nc.SetReadDeadline(time.Time{}) }()
 	}
 
 	suite := i.Suite
