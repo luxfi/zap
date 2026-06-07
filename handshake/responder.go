@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"runtime"
 	"time"
 
@@ -60,6 +61,15 @@ func (rs *Responder) Run(conn io.ReadWriter) (*Session, error) {
 	// refuse rather than let them ship a broken posture.
 	if (rs.Profile == ProfileStrictPQ || rs.Profile == ProfileFIPS) && rs.ReplayCache == nil {
 		return nil, errors.New("zap-pq: ReplayCache is required under StrictPQ/FIPS profile")
+	}
+
+	// Bound the whole handshake by HandshakeTimeoutSec so an unauthenticated
+	// peer that connects and then stalls cannot pin this goroutine and FD
+	// indefinitely (pre-auth slowloris). Applies only when conn is a net.Conn;
+	// bare io.ReadWriter callers own their own timeout.
+	if nc, ok := conn.(net.Conn); ok {
+		_ = nc.SetReadDeadline(time.Now().Add(HandshakeTimeoutSec * time.Second))
+		defer func() { _ = nc.SetReadDeadline(time.Time{}) }()
 	}
 
 	r := rs.Rand
