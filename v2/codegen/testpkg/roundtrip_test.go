@@ -45,9 +45,9 @@ func TestRoundTrip_ScalarsAndBytes(t *testing.T) {
 		BlockContentHash [32]byte
 	}{
 		Version:     0x01,
-		ChainID:     1000001,                // arbitrary large chain ID fixture
-		BlockHeight: 0xDEADBEEFCAFEF00D,     // load-bearing pattern
-		CertMinTier: 0x02,                   // LP-217 PQ-strict
+		ChainID:     1000001,            // arbitrary large chain ID fixture
+		BlockHeight: 0xDEADBEEFCAFEF00D, // load-bearing pattern
+		CertMinTier: 0x02,               // LP-217 PQ-strict
 		RequestID:   0x99887766,
 		BlockContentHash: [32]byte{
 			0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
