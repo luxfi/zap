@@ -3,6 +3,7 @@ module github.com/luxfi/zap
 go 1.26.4
 
 require (
+	github.com/coder/websocket v1.8.12
 	github.com/luxfi/mdns v0.1.1
 	github.com/luxfi/pq v1.0.3
 	github.com/quic-go/quic-go v0.59.1
