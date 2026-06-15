@@ -1,0 +1,23 @@
+{
+  "name": "@zap-proto/web",
+  "version": "0.1.0",
+  "description": "Faithful ZAP wire codec + ZAP-over-WebSocket (zapweb) client for browsers. Byte-identical to github.com/luxfi/zap.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node --test src/"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "author": "ZAP Protocol <dev@zap.dev>",
+  "license": "MIT"
+}
