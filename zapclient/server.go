@@ -168,6 +168,17 @@ func (s *Server) Stop() {
 // NodeID returns the server's NodeID — useful for tests + ops.
 func (s *Server) NodeID() string { return s.node.NodeID() }
 
+// Dispatch routes one inbound message to its registered procedure
+// handler, running the PeerVerifier first. It is the transport-agnostic
+// entry point: the native ZAP node reaches it via Handle, and alternate
+// transports — e.g. zapweb over WebSocket for browser clients — call it
+// directly. `from` is the authenticated peer identity passed to the
+// verifier and PeerInfo. Returns the handler's response, or an error for
+// unknown-procedure / verifier-reject / handler failure.
+func (s *Server) Dispatch(ctx context.Context, from string, msg *zap.Message) (*zap.Message, error) {
+	return s.dispatch(ctx, from, msg)
+}
+
 // dispatch is the shared Handler for every registered opcode. It
 // runs PeerVerifier first; on accept, forwards to the procedure-
 // specific handler.
