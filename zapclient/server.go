@@ -41,6 +41,17 @@ func WithServerNodeID(id string) ServerOption {
 	return func(o *ServerOptions) { o.NodeID = id }
 }
 
+// WithServerPort sets the fixed TCP port the server listens on. Use this
+// whenever peers reach the server by a stable address — Kubernetes
+// Service DNS, a docker-compose service name, or localhost — rather than
+// by mDNS discovery. Port 0 (the default) binds an ephemeral port, which
+// is only reachable via mDNS; mDNS multicast is not forwarded across most
+// Kubernetes pod overlays, so a fixed port + WithNoDiscovery is the
+// correct production configuration.
+func WithServerPort(p int) ServerOption {
+	return func(o *ServerOptions) { o.Port = p }
+}
+
 // WithServerTLS configures mutual TLS on the listener.
 func WithServerTLS(cfg *tls.Config) ServerOption {
 	return func(o *ServerOptions) { o.TLS = cfg }
