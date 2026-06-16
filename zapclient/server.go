@@ -151,7 +151,13 @@ func (s *Server) Register(procedure string, h ProcedureHandler) error {
 	}
 	s.procedures[op] = registration{procedure: procedure, handler: h}
 	s.procNames[procedure] = op
-	s.node.Handle(op, s.dispatch)
+	// The Node routes inbound messages by msgType == Flags()>>8 (the high
+	// byte; see Node.acceptLoop). Procedure opcodes live in that high byte
+	// (ProcedureOpcode returns code<<8, low byte zero), so register the
+	// node handler under op>>8 — registering under the full op would never
+	// match the inbound lookup and the wire call would hang. s.dispatch
+	// then re-reads the full Flags() to select the procedure.
+	s.node.Handle(op>>8, s.dispatch)
 	return nil
 }
 
