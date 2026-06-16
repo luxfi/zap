@@ -143,9 +143,18 @@ func (n *Node) Start() error {
 
 		n.discovery.OnPeer(n.handlePeerEvent)
 
+		// mDNS advertise/browse is BEST-EFFORT. It lets peers find each
+		// other zero-config on a LAN, but it is not required for service:
+		// the node is already accepting on its listener, and in-cluster
+		// peers reach it by address (Service DNS at the fixed port). On
+		// networks without multicast (most Kubernetes pod overlays,
+		// restricted hosts) discovery fails to start — the node MUST keep
+		// serving regardless. Log and continue rather than tearing down
+		// the listener.
 		if err := n.discovery.Start(); err != nil {
-			n.listener.Close()
-			return fmt.Errorf("failed to start discovery: %w", err)
+			n.logger.Warn("ZAP mDNS discovery unavailable; serving without it (peers reach this node by address)",
+				"nodeID", n.nodeID, "service", n.serviceType, "err", err)
+			n.discovery = nil
 		}
 	}
 
