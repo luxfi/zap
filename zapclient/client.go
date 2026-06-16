@@ -55,6 +55,11 @@ type ClientOptions struct {
 	// Pluggable wiring. nil means "use default for this concern."
 	Discovery Discovery
 	Picker    Picker
+
+	// StaticPeers is an explicit "host:port" peer set, bypassing mDNS.
+	// The cloud/K8s path — pass the Service DNS name(s). When set (and
+	// Discovery is nil) Connect builds a static Discovery over them.
+	StaticPeers []string
 }
 
 // ClientOption is the functional-option constructor knob.
@@ -103,6 +108,14 @@ func WithDiscovery(d Discovery) ClientOption {
 	return func(o *ClientOptions) { o.Discovery = d }
 }
 
+// WithStaticPeers sets explicit "host:port" peer addresses, bypassing
+// mDNS. The cloud/K8s path: pass Service DNS names
+// (e.g. "ta.ns.svc.cluster.local:7801"). An explicit WithDiscovery wins
+// over this.
+func WithStaticPeers(addrs ...string) ClientOption {
+	return func(o *ClientOptions) { o.StaticPeers = addrs }
+}
+
 // WithPicker overrides the per-Call peer selector.
 func WithPicker(p Picker) ClientOption {
 	return func(o *ClientOptions) { o.Picker = p }
@@ -120,6 +133,13 @@ type Client struct {
 	mu       sync.Mutex
 	closed   bool
 	stopDisc func()
+
+	// dialMu guards addrID, the memo of peer Address → handshake-learned
+	// NodeID. Static peers advertise a placeholder NodeID; we dial their
+	// Address once (ConnectDirectID) and address subsequent Calls to the
+	// real NodeID the handshake returned.
+	dialMu sync.Mutex
+	addrID map[string]string
 }
 
 // Connect resolves a service via Discovery and returns a Client.
@@ -134,6 +154,11 @@ func Connect(ctx context.Context, serviceType string, opts ...ClientOption) (*Cl
 	}
 	if o.NodeID == "" {
 		o.NodeID = "zapclient-" + randomSuffix()
+	}
+	// Static peers (cloud/K8s Service DNS) build a static Discovery when
+	// no explicit Discovery was supplied.
+	if o.Discovery == nil && len(o.StaticPeers) > 0 {
+		o.Discovery = newStaticDiscovery(serviceType, o.StaticPeers)
 	}
 
 	// The client-side Node has no listener of its own — discovery is
@@ -181,6 +206,7 @@ func Connect(ctx context.Context, serviceType string, opts ...ClientOption) (*Cl
 		timeout:  o.CallTimeout,
 		logger:   o.Logger,
 		stopDisc: stopDisc,
+		addrID:   map[string]string{},
 	}, nil
 }
 
@@ -209,11 +235,15 @@ func (c *Client) Call(ctx context.Context, procedure string, req *zap.Message) (
 		ctx, cancel = context.WithTimeout(ctx, c.timeout)
 		defer cancel()
 	}
+	target, err := c.resolvePeer(peer)
+	if err != nil {
+		return nil, err
+	}
 	// Tag the message's flags with the procedure opcode. The node
 	// stamps a separate request-correlation header on top; the
 	// procedure opcode rides in the message flags field.
 	tagged := withFlags(req, op)
-	return c.node.Call(ctx, peer.NodeID, tagged)
+	return c.node.Call(ctx, target, tagged)
 }
 
 // Send invokes procedure as fire-and-forget — no response awaited.
@@ -226,7 +256,11 @@ func (c *Client) Send(ctx context.Context, procedure string, req *zap.Message) e
 	if err != nil {
 		return err
 	}
-	return c.node.Send(ctx, peer.NodeID, withFlags(req, op))
+	target, err := c.resolvePeer(peer)
+	if err != nil {
+		return err
+	}
+	return c.node.Send(ctx, target, withFlags(req, op))
 }
 
 // Broadcast sends procedure to every current peer. Returns a map of
@@ -237,6 +271,35 @@ func (c *Client) Broadcast(ctx context.Context, procedure string, req *zap.Messa
 		return map[string]error{"": err}
 	}
 	return c.node.Broadcast(ctx, withFlags(req, op))
+}
+
+// resolvePeer returns the NodeID to address a Call/Send at. A peer that
+// carries an Address (static discovery, or mDNS) is dialed directly once
+// via ConnectDirectID and its handshake-learned NodeID is memoized — this
+// is what makes static peers (placeholder NodeID + real Address)
+// reachable. A peer without an Address falls back to its advertised
+// NodeID (the node's own mDNS auto-connect path).
+func (c *Client) resolvePeer(peer Peer) (string, error) {
+	if peer.Address == "" {
+		return peer.NodeID, nil
+	}
+	c.dialMu.Lock()
+	if id, ok := c.addrID[peer.Address]; ok {
+		c.dialMu.Unlock()
+		return id, nil
+	}
+	c.dialMu.Unlock()
+	id, err := c.node.ConnectDirectID(peer.Address)
+	if err != nil {
+		return "", fmt.Errorf("zapclient: dial %s: %w", peer.Address, err)
+	}
+	if id == "" { // QUIC path returns no id — fall back to advertised
+		id = peer.NodeID
+	}
+	c.dialMu.Lock()
+	c.addrID[peer.Address] = id
+	c.dialMu.Unlock()
+	return id, nil
 }
 
 // Peers returns the current peer snapshot.
