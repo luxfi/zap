@@ -737,14 +737,27 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 	return conn, nil
 }
 
-// ConnectDirect connects directly to a peer at the given address (bypasses mDNS).
+// ConnectDirect connects directly to a peer at the given address
+// (bypasses mDNS). Use ConnectDirectID when you need the handshake-
+// learned peer NodeID back — e.g. to address subsequent Calls to a
+// static peer whose advertised NodeID is only a placeholder.
 func (n *Node) ConnectDirect(addr string) error {
+	_, err := n.ConnectDirectID(addr)
+	return err
+}
+
+// ConnectDirectID dials addr, performs the NodeID handshake, registers
+// the connection, and returns the peer's learned NodeID. Idempotent: if
+// a connection to that peer already exists it returns the existing
+// peer's NodeID and drops the duplicate dial. (TCP transport; the QUIC
+// path registers the peer internally and returns an empty id.)
+func (n *Node) ConnectDirectID(addr string) (string, error) {
 	if n.transport == TransportQUIC {
-		return n.quicConnectDirect(n.ctx, addr)
+		return "", n.quicConnectDirect(n.ctx, addr)
 	}
 	netConn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
-		return fmt.Errorf("failed to connect to %s: %w", addr, err)
+		return "", fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
 	if n.tlsCfg != nil {
 		netConn = tls.Client(netConn, n.tlsCfg)
@@ -753,19 +766,19 @@ func (n *Node) ConnectDirect(addr string) error {
 	// Send handshake.
 	if err := writeMessage(netConn, EncodeNodeIDHandshake(n.nodeID)); err != nil {
 		netConn.Close()
-		return err
+		return "", err
 	}
 
 	// Read handshake response.
 	data, err := readMessageRaw(netConn)
 	if err != nil {
 		netConn.Close()
-		return err
+		return "", err
 	}
 	peerID, ok := DecodeNodeIDHandshake(data)
 	if !ok {
 		netConn.Close()
-		return fmt.Errorf("invalid peer handshake")
+		return "", fmt.Errorf("invalid peer handshake")
 	}
 
 	conn := &Conn{
@@ -780,7 +793,7 @@ func (n *Node) ConnectDirect(addr string) error {
 	if _, ok := n.conns[peerID]; ok {
 		n.connsMu.Unlock()
 		netConn.Close()
-		return nil // Already connected, that's fine
+		return peerID, nil // Already connected, that's fine
 	}
 	n.conns[peerID] = conn
 	n.connsMu.Unlock()
@@ -804,7 +817,7 @@ func (n *Node) ConnectDirect(addr string) error {
 		n.dispatchLoop(netConn, conn, peerID)
 	}()
 
-	return nil
+	return peerID, nil
 }
 
 // Send sends a message over the connection.
