@@ -1,4 +1,4 @@
-# LLM.md - Hanzo Zap
+# Hanzo Zap
 
 ## Overview
 Go module: github.com/luxfi/zap
