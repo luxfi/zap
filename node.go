@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -494,7 +495,7 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 					ref.release()
 					continue
 				}
-				resp, herr := handler(n.ctx, peerID, msg)
+				resp, herr := n.safeHandle(handler, peerID, msgType, msg)
 				if herr != nil {
 					n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", herr)
 					ref.release()
@@ -531,7 +532,7 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 			ref.release()
 			continue
 		}
-		resp, herr := handler(n.ctx, peerID, msg)
+		resp, herr := n.safeHandle(handler, peerID, msgType, msg)
 		if herr != nil {
 			n.logger.Error("Handler error", "peerID", peerID, "msgType", msgType, "error", herr)
 			ref.release()
@@ -728,7 +729,11 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 			n.handlersMu.RUnlock()
 
 			if ok {
-				handler(n.ctx, peerID, msg)
+				// Guarded: a handler panic here must not kill this receive
+				// goroutine / the node. The error return is intentionally
+				// dropped — this is the fire-and-forget receive path for an
+				// outbound-dialed peer; safeHandle has already logged.
+				_, _ = n.safeHandle(handler, peerID, msgType, msg)
 			}
 			ref.release()
 		}
@@ -957,4 +962,29 @@ func attachToMessage(m *Message, ref *bufRef) {
 	if m != nil {
 		m.refs = ref
 	}
+}
+
+// safeHandle invokes a registered handler with a recover() guard. A handler
+// is application code (e.g. forward.Serve's HTTP bridge) reachable directly
+// from attacker-controlled bytes on the wire; a panic inside it — out-of-
+// range index on a malformed envelope, a nil deref, a third-party library
+// fault — must NEVER unwind into the per-connection dispatch goroutine and
+// crash the whole node/process. On panic we log with the peer and message
+// type and return an error so the dispatch loop drops that one connection;
+// every other connection and the node itself survive.
+//
+// This is the single recover boundary for ALL handler dispatch in this
+// node (correlated Call requests and uncorrelated messages alike). It is
+// the one-and-only place a handler panic is contained.
+func (n *Node) safeHandle(handler Handler, peerID string, msgType uint16, msg *Message) (resp *Message, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			n.logger.Error("ZAP handler panic recovered",
+				"peerID", peerID, "msgType", msgType, "panic", r,
+				"stack", string(debug.Stack()))
+			resp = nil
+			err = fmt.Errorf("handler panic (msgType=%d): %v", msgType, r)
+		}
+	}()
+	return handler(n.ctx, peerID, msg)
 }

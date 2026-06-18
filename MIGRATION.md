@@ -5,6 +5,44 @@ The canonical KV + transport for Lux is `luxfi/zap` (this repo) backed by
 **and** cold ancient stores. PebbleDB / leveldb remain only as legacy
 in-place upgrade paths.
 
+## ZAP runtime consolidation (serialization core)
+
+`github.com/zap-proto/go` is the canonical pure-stdlib runtime for the ZAP
+wire format (`Parse`/`Message`/`Object`/`List` + `Builder`/`ObjectBuilder`/
+`ListBuilder` + `Schema`). This repo (`luxfi/zap`) historically duplicated
+that core in its own `zap.go`/`builder.go`/`schema.go` while adding the
+network layer (Node mesh, QUIC/TCP, mDNS, PQ-TLS handshake, EVM types, the
+`forward` HTTP-over-ZAP contract). The duplication is being collapsed so
+there is ONE serialization runtime; `zap-proto/go` is the source of truth and
+this repo will ride it.
+
+**Status (first safe step landed):** the two cores are now proven to emit a
+byte-identical data segment, and `zap-proto/go` has absorbed the two deltas
+that previously diverged it from this repo's hardened core, so the readers now
+agree on accept/reject for every input.
+
+- **Wire proof.** `zap_crosswire_test.go` (here) and the file of the same
+  name in `zap-proto/go` pin the SAME `goldenV1Hex` constant. This repo's
+  `NewBuilderV1` emits it byte-for-byte; `zap-proto/go`'s default `NewBuilder`
+  emits it too. The ONLY header difference between this repo's default
+  (Version2) output and the v1 golden vector is byte 4 (the version). A live
+  cross-encode in a throwaway `go.work` joining both modules confirmed every
+  field round-trips both directions.
+- **Deltas reconciled in `zap-proto/go`** (additive — no honest wire changed):
+  (1) it now accepts `Version1` AND `Version2` on read (was v1-only → it would
+  reject this repo's default v2 buffers); (2) its reader now applies the same
+  hardening this repo already had — unsigned-forward `Bytes` with
+  `absPos < HeaderSize` rejection, `Object`/`List` `absOffset < HeaderSize`
+  rejection, and `List` `length ≤ msgsize` clamp.
+
+**Remaining steps** (see `zap-proto/go`'s LLM.md for the canonical list):
+`schema.go` is already byte-identical and is the first alias target; the
+reader/builder alias follows once `cmd/zapgen` lands (the read-buffer pool —
+`Message.refs`/`Release`/`Retain` — is network-local and stays here); the
+`StartObject` pre-reserve discipline is a documented, test-covered delta to
+unify when the builder is aliased (adopt `zap-proto/go`'s pre-reserve — it is
+strictly more reserving and byte-identical for every honest layout).
+
 This doc enumerates every storage surface in luxd and the migration path
 per backend.
 

@@ -204,7 +204,10 @@ func (n *Node) handleCallStream(peerID string, stream TransportStream) {
 		return
 	}
 
-	resp, herr := handler(n.ctx, peerID, msg)
+	// Guarded: a handler panic on the QUIC per-Call stream must not crash
+	// the node any more than on the TCP path. safeHandle recovers, logs,
+	// and converts the panic to an error; the stream is then closed.
+	resp, herr := n.safeHandle(handler, peerID, msgType, msg)
 	if herr != nil {
 		n.logger.Error("Handler error (stream)", "peerID", peerID, "msgType", msgType, "error", herr)
 		return
@@ -227,7 +230,9 @@ func (n *Node) invokeHandlerOneWay(peerID string, msg *Message) {
 	if !ok {
 		return
 	}
-	_, _ = handler(n.ctx, peerID, msg)
+	// Guarded: same recover boundary as every other dispatch path so a
+	// panicking one-way handler cannot kill the node.
+	_, _ = n.safeHandle(handler, peerID, msgType, msg)
 }
 
 // quicCall is the QUIC path for Node.Call.
@@ -255,10 +260,10 @@ func (n *Node) quicCall(ctx context.Context, peerID string, msg *Message) (*Mess
 // quicCallStream runs one Call on a fresh per-Call QUIC stream.
 //
 // The stream lifecycle is:
-//   1. OpenCallStream — server peer's AcceptCallStream wakes.
-//   2. WriteFrame(req) — single length-prefixed ZAP frame.
-//   3. ReadFrame()      — single length-prefixed ZAP frame (response).
-//   4. Close            — stream ID returns to the QUIC pool.
+//  1. OpenCallStream — server peer's AcceptCallStream wakes.
+//  2. WriteFrame(req) — single length-prefixed ZAP frame.
+//  3. ReadFrame()      — single length-prefixed ZAP frame (response).
+//  4. Close            — stream ID returns to the QUIC pool.
 //
 // No correlation header is needed on the wire: each stream carries
 // exactly one request + one response. The response payload is the raw
@@ -379,4 +384,3 @@ func (n *Node) getOrConnectQUIC(ctx context.Context, peerID string) (TransportCo
 	go n.serveTransportConn(peerID, newTC)
 	return newTC, nil
 }
-
