@@ -73,6 +73,11 @@ func requestToForward(req *http.Request) (Forward, error) {
 	if h == nil {
 		h = http.Header{}
 	}
+	// Lift the edge-validated identity out of the X-* headers into the typed
+	// fields. These four are only honoured here because by the time a request
+	// reaches the gateway-side Forwarder the gateway has ALREADY validated the
+	// JWT and re-set them; a request that bypassed the gateway carries no
+	// trustworthy values and the full strip below scrubs everything regardless.
 	isAdmin, _ := strconv.ParseBool(h.Get(HeaderUserIsAdmin))
 	perms, _ := strconv.ParseInt(h.Get(HeaderUserPerms), 10, 64)
 	fwd := Forward{
@@ -84,10 +89,11 @@ func requestToForward(req *http.Request) (Forward, error) {
 		Path:        path,
 		Body:        body,
 	}
-	h.Del(HeaderOrgID)
-	h.Del(HeaderUserID)
-	h.Del(HeaderUserIsAdmin)
-	h.Del(HeaderUserPerms)
+	// Strip the FULL canonical identity set (not just the 4 promoted ones) so
+	// no forged identity header — X-Roles, X-User-Email, X-IAM-*, X-Hanzo-*,
+	// X-Gateway-*, identity cookies — is ever serialized into the envelope.
+	// Authorization (the Bearer JWT base validates) is preserved.
+	stripClientIdentity(h)
 
 	if len(h) > 0 {
 		hdrJSON, err := json.Marshal(map[string][]string(h))
