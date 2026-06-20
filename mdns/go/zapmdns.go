@@ -124,12 +124,12 @@ func Publish(opts PublishOptions) (*Publisher, error) {
 	}
 
 	info, err := mdns.NewMDNSService(
-		opts.ServerID,                // instance name
-		ServiceType+".local.",        // service type
-		"",                           // domain (default)
-		host+".local.",               // host
+		opts.ServerID,         // instance name
+		ServiceType+".local.", // service type
+		"",                    // domain (default)
+		host+".local.",        // host
 		opts.Port,
-		nil,                          // ips (auto-detect)
+		nil, // ips (auto-detect)
 		txt,
 	)
 	if err != nil {

@@ -1,0 +1,77 @@
+{
+  "lp": "lp-218",
+  "description": "ZAP P3Q PQ rollup (LP-218 §Wire schemas). 4 envelopes. Schema IDs 0xE0..0xE3 per the LP-218 file — overlaps with LP-208 (0xE0..0xE1) and LP-211 (0xE2..0xE7) per session handoff. Until the LP-218 / LP-208 / LP-211 schema-ID allocation is reconciled in the LP files, this bundle emits at the LP-218-declared kind bytes (0x40..0x43 *Kind* byte, distinct from the schema-ID prefix). The schema-ID byte and the kind byte are separate concerns: kind is the discriminator at object offset 0 of the payload; schema-ID is the registry namespace.",
+  "schemas": [
+    {
+      "wire_name": "RollupBatchTx",
+      "go_name":   "RollupBatchTxSchema",
+      "kind":      "0x40",
+      "size":      146,
+      "package":   "rollupwire",
+      "out":       "lp-218/rollup_batch_tx_zap.go",
+      "fields": [
+        { "name": "Version",        "type": "uint8",   "offset": 1   },
+        { "name": "SequencerID",    "type": "bytes20", "offset": 2   },
+        { "name": "PrevRoot",       "type": "bytes32", "offset": 22  },
+        { "name": "NewRoot",        "type": "bytes32", "offset": 54  },
+        { "name": "BatchHash",      "type": "bytes32", "offset": 86  },
+        { "name": "BatchNum",       "type": "uint64",  "offset": 118 },
+        { "name": "TxCount",        "type": "uint32",  "offset": 126 },
+        { "name": "PulsarSigOff",   "type": "uint32",  "offset": 130 },
+        { "name": "GroupPubKeyOff", "type": "uint32",  "offset": 134 },
+        { "name": "ZKProofOff",     "type": "uint32",  "offset": 138 },
+        { "name": "TxFramesOff",    "type": "uint32",  "offset": 142 }
+      ]
+    },
+    {
+      "wire_name": "RollupChallengeTx",
+      "go_name":   "RollupChallengeTxSchema",
+      "kind":      "0x41",
+      "size":      66,
+      "package":   "rollupwire",
+      "out":       "lp-218/rollup_challenge_tx_zap.go",
+      "fields": [
+        { "name": "Version",           "type": "uint8",   "offset": 1  },
+        { "name": "ChallengedBatchID", "type": "bytes32", "offset": 2  },
+        { "name": "ChallengerID",      "type": "bytes20", "offset": 34 },
+        { "name": "FraudWitnessOff",   "type": "uint32",  "offset": 54 },
+        { "name": "BondAmount",        "type": "uint64",  "offset": 58 }
+      ]
+    },
+    {
+      "wire_name": "RollupExitTx",
+      "go_name":   "RollupExitTxSchema",
+      "kind":      "0x42",
+      "size":      110,
+      "package":   "rollupwire",
+      "out":       "lp-218/rollup_exit_tx_zap.go",
+      "fields": [
+        { "name": "Version",        "type": "uint8",   "offset": 1   },
+        { "name": "UserAddress",    "type": "bytes20", "offset": 2   },
+        { "name": "BatchID",        "type": "bytes32", "offset": 22  },
+        { "name": "ExitAmount",     "type": "bytes32", "offset": 54  },
+        { "name": "TokenID",        "type": "bytes20", "offset": 86  },
+        { "name": "MerkleProofOff", "type": "uint32",  "offset": 106 }
+      ]
+    },
+    {
+      "wire_name": "RollupGenesisTx",
+      "go_name":   "RollupGenesisTxSchema",
+      "kind":      "0x43",
+      "size":      64,
+      "package":   "rollupwire",
+      "out":       "lp-218/rollup_genesis_tx_zap.go",
+      "fields": [
+        { "name": "Version",              "type": "uint8",   "offset": 1  },
+        { "name": "RollupID",             "type": "bytes20", "offset": 2  },
+        { "name": "DeployerAddress",      "type": "bytes20", "offset": 22 },
+        { "name": "RollupMode",           "type": "uint8",   "offset": 42 },
+        { "name": "CertModeFloor",        "type": "uint8",   "offset": 43 },
+        { "name": "ChallengeWindowBlocks","type": "uint64",  "offset": 44 },
+        { "name": "InitialRootOff",       "type": "uint32",  "offset": 52 },
+        { "name": "SequencerPubKeyOff",   "type": "uint32",  "offset": 56 },
+        { "name": "ConfigOff",            "type": "uint32",  "offset": 60 }
+      ]
+    }
+  ]
+}

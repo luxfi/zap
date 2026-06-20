@@ -1,0 +1,59 @@
+{
+  "lp": "lp-214",
+  "description": "Lux light client (LP-214 §Wire schemas). 3 envelopes. Schema IDs 0xF0..0xF2.",
+  "schemas": [
+    {
+      "wire_name": "LightClientBlockHeaderRequest",
+      "go_name":   "LCBlockHeaderReqSchema",
+      "kind":      "0x50",
+      "size":      51,
+      "package":   "lcwire",
+      "out":       "lp-214/lc_block_header_request_zap.go",
+      "fields": [
+        { "name": "Version",          "type": "uint8",   "offset": 1  },
+        { "name": "ChainID",          "type": "uint32",  "offset": 2  },
+        { "name": "BlockHeight",      "type": "uint64",  "offset": 6  },
+        { "name": "BlockContentHash", "type": "bytes32", "offset": 14 },
+        { "name": "CertMinTier",      "type": "uint8",   "offset": 46 },
+        { "name": "RequestID",        "type": "uint32",  "offset": 47 }
+      ]
+    },
+    {
+      "wire_name": "LightClientStateProofRequest",
+      "go_name":   "LCStateProofReqSchema",
+      "kind":      "0x51",
+      "size":      83,
+      "package":   "lcwire",
+      "out":       "lp-214/lc_state_proof_request_zap.go",
+      "fields": [
+        { "name": "Version",     "type": "uint8",   "offset": 1  },
+        { "name": "ChainID",     "type": "uint32",  "offset": 2  },
+        { "name": "BlockHeight", "type": "uint64",  "offset": 6  },
+        { "name": "StateRoot",   "type": "bytes32", "offset": 14 },
+        { "name": "KeyHash",     "type": "bytes32", "offset": 46 },
+        { "name": "ProofScheme", "type": "uint8",   "offset": 78 },
+        { "name": "RequestID",   "type": "uint32",  "offset": 79 }
+      ]
+    },
+    {
+      "wire_name": "LightClientCertProof",
+      "go_name":   "LCCertProofSchema",
+      "kind":      "0x52",
+      "size":      36,
+      "package":   "lcwire",
+      "out":       "lp-214/lc_cert_proof_zap.go",
+      "fields": [
+        { "name": "Version",        "type": "uint8",  "offset": 1  },
+        { "name": "RequestID",      "type": "uint32", "offset": 2  },
+        { "name": "ChainID",        "type": "uint32", "offset": 6  },
+        { "name": "BlockHeight",    "type": "uint64", "offset": 10 },
+        { "name": "CertTier",       "type": "uint8",  "offset": 18 },
+        { "name": "ProofScheme",    "type": "uint8",  "offset": 19 },
+        { "name": "BlockHeaderOff", "type": "uint32", "offset": 20 },
+        { "name": "QuasarCertOff",  "type": "uint32", "offset": 24 },
+        { "name": "StateProofOff",  "type": "uint32", "offset": 28 },
+        { "name": "KeyValueOff",    "type": "uint32", "offset": 32 }
+      ]
+    }
+  ]
+}

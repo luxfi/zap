@@ -15,8 +15,22 @@ type Builder struct {
 	rootOffset int
 }
 
-// NewBuilder creates a new builder with the given initial capacity.
+// NewBuilder creates a new builder with the given initial capacity. The
+// resulting message is emitted with Version2 in the wire header (the
+// current default). Use NewBuilderV1 only for legacy v1 emitters; new
+// code should always use NewBuilder.
 func NewBuilder(capacity int) *Builder {
+	return newBuilder(capacity, Version2)
+}
+
+// NewBuilderV1 creates a new builder that emits Version1 messages. This is
+// kept only for explicit-legacy-emitter call sites (none in tree as of
+// LP-023 v3.1 round 2). New code should call NewBuilder.
+func NewBuilderV1(capacity int) *Builder {
+	return newBuilder(capacity, Version1)
+}
+
+func newBuilder(capacity int, version uint16) *Builder {
 	if capacity < HeaderSize {
 		capacity = 256
 	}
@@ -26,7 +40,7 @@ func NewBuilder(capacity int) *Builder {
 	}
 	// Write magic and version
 	copy(b.buf[0:4], Magic)
-	binary.LittleEndian.PutUint16(b.buf[4:6], Version)
+	binary.LittleEndian.PutUint16(b.buf[4:6], version)
 	return b
 }
 
@@ -77,10 +91,10 @@ func (b *Builder) FinishWithFlags(flags uint16) []byte {
 
 // ObjectBuilder builds a ZAP object (struct).
 type ObjectBuilder struct {
-	b          *Builder
-	startPos   int
-	dataSize   int
-	offsets    []offsetEntry
+	b        *Builder
+	startPos int
+	dataSize int
+	offsets  []offsetEntry
 }
 
 type offsetEntry struct {
@@ -162,6 +176,28 @@ func (ob *ObjectBuilder) SetFloat64(fieldOffset int, v float64) {
 	ob.SetUint64(fieldOffset, float64bits(v))
 }
 
+// SetBytesFixed copies len(v) bytes inline at fieldOffset within the
+// object's fixed payload. This is the generic-width counterpart of
+// SetHash (32 bytes) and SetAddress (20 bytes); it covers any N>0
+// inline byte-array slot (e.g., LP-201 SessionID [16]byte, LP-208
+// QuasarWitness [96]byte).
+//
+// Unlike SetBytes (which writes a variable-length tail pointer
+// {relOffset uint32, length uint32}), SetBytesFixed writes the bytes
+// IN PLACE in the fixed payload. Use this when the schema declares a
+// fixed-width byte field; use SetBytes when the schema declares a
+// variable-length tail.
+//
+// Panics on len(v) == 0 are avoided: a zero-length argument is a
+// no-op (the slot is left as the zero value).
+func (ob *ObjectBuilder) SetBytesFixed(fieldOffset int, v []byte) {
+	if len(v) == 0 {
+		return
+	}
+	ob.ensureField(fieldOffset + len(v))
+	copy(ob.b.buf[ob.startPos+fieldOffset:], v)
+}
+
 // SetText sets a text (string) field.
 func (ob *ObjectBuilder) SetText(fieldOffset int, v string) {
 	ob.SetBytes(fieldOffset, []byte(v))
@@ -228,6 +264,28 @@ func (ob *ObjectBuilder) ensureField(endOffset int) {
 		}
 		ob.b.pos = needed
 	}
+}
+
+// ReserveFixed extends the builder's write cursor so the object's
+// entire fixed payload of dataSize bytes is materialized (zero-filled
+// up to startPos+dataSize). Use this BEFORE writing any variable-
+// length tail (list elements, deferred bytes) that should live AFTER
+// the fixed section.
+//
+// Without this call, list elements or deferred-data writes interleave
+// with the unreserved tail of the fixed section, producing incorrect
+// wire bytes when later Set* calls patch fields that overlap with
+// already-written variable data.
+//
+// Idempotent: a second call with the same dataSize is a no-op. A call
+// with a smaller dataSize is also a no-op (the cursor never moves
+// backwards).
+//
+// This is the exported counterpart to the internal ensureField helper.
+// It is used by zapv2.WriteList to keep the parent's payload reserved
+// before list elements are appended.
+func (ob *ObjectBuilder) ReserveFixed(dataSize int) {
+	ob.ensureField(dataSize)
 }
 
 // Finish finalizes the object and returns its offset.

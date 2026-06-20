@@ -31,9 +31,9 @@ func newMDNSDiscovery(serviceType, clientID string, browseInterval time.Duration
 	return &mdnsDiscovery{disc: d}
 }
 
-func (m *mdnsDiscovery) Start() error    { return m.disc.Start() }
-func (m *mdnsDiscovery) Stop()           { m.disc.Stop() }
-func (m *mdnsDiscovery) PeerCount() int  { return m.disc.PeerCount() }
+func (m *mdnsDiscovery) Start() error   { return m.disc.Start() }
+func (m *mdnsDiscovery) Stop()          { m.disc.Stop() }
+func (m *mdnsDiscovery) PeerCount() int { return m.disc.PeerCount() }
 func (m *mdnsDiscovery) ServiceType() string {
 	return m.disc.ServiceType()
 }

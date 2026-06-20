@@ -120,12 +120,12 @@ const (
 	MsgTypeToolResult uint16 = 11
 
 	// Field offsets for tool messages
-	FieldToolID     = 0  // uint32 - tool identifier
+	FieldToolID      = 0  // uint32 - tool identifier
 	FieldToolNameLen = 4  // uint32 - tool name length
-	FieldToolName   = 8  // bytes - tool name (up to 32 bytes)
-	FieldArgCount   = 40 // uint32 - number of arguments
-	FieldResultLen  = 44 // uint32 - result length
-	FieldResult     = 48 // bytes - result data
+	FieldToolName    = 8  // bytes - tool name (up to 32 bytes)
+	FieldArgCount    = 40 // uint32 - number of arguments
+	FieldResultLen   = 44 // uint32 - result length
+	FieldResult      = 48 // bytes - result data
 )
 
 // simulateZAPToolCall simulates ZAP tool calling with zero-copy
