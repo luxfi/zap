@@ -49,9 +49,9 @@ type Struct struct {
 
 // Enum describes a ZAP enum.
 type Enum struct {
-	Name    string
-	Type    Type // Underlying type (Uint8, Uint16, etc.)
-	Values  map[string]uint64
+	Name   string
+	Type   Type // Underlying type (Uint8, Uint16, etc.)
+	Values map[string]uint64
 }
 
 // Schema describes a complete ZAP schema.

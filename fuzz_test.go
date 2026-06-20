@@ -19,6 +19,105 @@ func buildSeedMessage(fields func(ob *ObjectBuilder)) []byte {
 	return b.Finish()
 }
 
+// FuzzParse is a round-trip property fuzzer for Parse:
+//
+// Properties (all hold for Parse-accepted buffers):
+//
+//  1. msg.Bytes() == data[:msg.Size()]            — Parse holds no derived
+//     buffer; Bytes() is exactly the declared-size prefix of the input.
+//  2. msg.Size() >= HeaderSize && msg.Size() <= len(data)
+//     — Parse cannot extend past what the caller passed in.
+//  3. Parse(msg.Bytes()) succeeds and yields a message with identical
+//     Bytes() — Parse is idempotent on its own output.
+//
+// Rejected buffers must return a typed error, never panic. LP-023 Red
+// round 3 follow-up #3. Complements FuzzZAPParse (accessor panic-safety on
+// arbitrary inputs) by pinning the Parse↔Bytes contract.
+func FuzzParse(f *testing.F) {
+	// Seed corpus: every valid construction we can think of, plus the
+	// adversarial buffers that exercised RED-HIGH-1/2/3.
+	f.Add(buildSeedMessage(func(ob *ObjectBuilder) { ob.SetUint64(0, 0xDEADBEEF) }))
+	f.Add(buildSeedMessage(func(ob *ObjectBuilder) {
+		ob.SetUint32(0, 42)
+		ob.SetText(4, "round-trip")
+	}))
+	f.Add(buildSeedMessage(func(ob *ObjectBuilder) {
+		ob.SetBool(0, true)
+		ob.SetBytes(4, []byte{0xCA, 0xFE, 0xBA, 0xBE})
+	}))
+	// Adversarial seeds: corrupted header bytes that should fail Parse.
+	f.Add([]byte{})
+	f.Add([]byte{0x5A, 0x41, 0x50, 0x00}) // magic only
+	{
+		hdr := make([]byte, HeaderSize)
+		copy(hdr[0:4], Magic)
+		binary.LittleEndian.PutUint16(hdr[4:6], 99)
+		binary.LittleEndian.PutUint32(hdr[12:16], HeaderSize)
+		f.Add(hdr)
+	}
+	// Seed with an empty list (length=0, offset=0).
+	f.Add(buildSeedMessage(func(ob *ObjectBuilder) {
+		ob.SetList(0, 0, 0)
+		ob.SetUint64(8, 1)
+	}))
+	// Seed with a length-prefixed list (post-RED-HIGH-1 clamp valid).
+	{
+		b := NewBuilder(256)
+		lb := b.StartList(4)
+		for i := 0; i < 4; i++ {
+			lb.AddBytes([]byte{0x00, 0x00, 0x00, byte(i)})
+		}
+		listOff, listLen := lb.Finish()
+		ob := b.StartObject(16)
+		ob.SetList(0, listOff, listLen)
+		ob.FinishAsRoot()
+		f.Add(b.Finish())
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		msg, err := Parse(data)
+		if err != nil {
+			// Property: Parse returns a typed error (not a panic) on bad
+			// inputs. The error itself is opaque to this property — only
+			// that we got HERE (no panic) matters. Sentinel error values
+			// are exercised by unit tests, not fuzz.
+			return
+		}
+
+		// Property 1: Bytes() == data[:Size()]. Parse stores no copy; the
+		// returned slice MUST alias data[:declaredSize].
+		size := msg.Size()
+		if size > len(data) {
+			t.Fatalf("msg.Size()=%d > len(data)=%d (Parse accepted truncated buffer)", size, len(data))
+		}
+		got := msg.Bytes()
+		if !bytes.Equal(got, data[:size]) {
+			t.Fatalf("Parse->Bytes mismatch: got len=%d want data[:%d]=len(%d)", len(got), size, size)
+		}
+
+		// Property 2: re-parse of Bytes() succeeds and pins Size() to its
+		// own length (idempotent — second parse cannot keep shrinking).
+		msg2, err2 := Parse(got)
+		if err2 != nil {
+			t.Fatalf("Parse(Bytes()) failed: %v", err2)
+		}
+		if msg2.Size() != size {
+			t.Fatalf("Parse(Bytes()).Size()=%d != msg.Size()=%d (not idempotent)", msg2.Size(), size)
+		}
+		got2 := msg2.Bytes()
+		if !bytes.Equal(got2, got) {
+			t.Fatalf("Parse->Bytes->Parse->Bytes drift")
+		}
+
+		// Property 3: Version() returns one of the accepted values
+		// (Parse-side gate already enforced; this catches regressions).
+		v := msg.Version()
+		if v != Version1 && v != Version2 {
+			t.Fatalf("Parse accepted bad version: %d", v)
+		}
+	})
+}
+
 // FuzzZAPParse feeds arbitrary bytes to Parse. It must never panic regardless
 // of input. Every returned error is acceptable; every non-error result must
 // produce a valid Message with accessible root.

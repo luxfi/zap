@@ -110,8 +110,8 @@ func TestAllowListVerifier(t *testing.T) {
 	}{
 		{"bd-1", "ListSecurity", true},
 		{"bd-2", "ListSecurity", true},
-		{"bd-3", "ListSecurity", false},      // not in allow list
-		{"bd-1", "DelistSecurity", false},    // procedure not exposed
+		{"bd-3", "ListSecurity", false},   // not in allow list
+		{"bd-1", "DelistSecurity", false}, // procedure not exposed
 	}
 	for _, tc := range cases {
 		err := v.Verify(context.Background(), PeerInfo{NodeID: tc.peer}, tc.proc)
@@ -198,11 +198,11 @@ func TestClient_Discover_Timeout(t *testing.T) {
 
 type emptyDiscovery struct{}
 
-func (emptyDiscovery) Peers() []Peer        { return nil }
-func (emptyDiscovery) PeerCount() int       { return 0 }
-func (emptyDiscovery) ServiceType() string  { return "no-such-service" }
-func (emptyDiscovery) Start() error         { return nil }
-func (emptyDiscovery) Stop()                {}
+func (emptyDiscovery) Peers() []Peer       { return nil }
+func (emptyDiscovery) PeerCount() int      { return 0 }
+func (emptyDiscovery) ServiceType() string { return "no-such-service" }
+func (emptyDiscovery) Start() error        { return nil }
+func (emptyDiscovery) Stop()               {}
 
 func contains(haystack, needle string) bool {
 	for i := 0; i+len(needle) <= len(haystack); i++ {

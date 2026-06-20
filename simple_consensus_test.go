@@ -13,12 +13,12 @@ import (
 
 // SimpleConsensus is a simplified consensus test using direct channels
 type SimpleConsensus struct {
-	id       int
-	inbox    chan *Message
-	peers    []*SimpleConsensus
-	votes    map[uint64]int
-	commits  atomic.Int32
-	mu       sync.Mutex
+	id      int
+	inbox   chan *Message
+	peers   []*SimpleConsensus
+	votes   map[uint64]int
+	commits atomic.Int32
+	mu      sync.Mutex
 }
 
 func newSimpleConsensus(id int) *SimpleConsensus {
