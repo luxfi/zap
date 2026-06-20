@@ -1,0 +1,26 @@
+{
+  "name": "static-transcript-suite-01",
+  "spec": "SPEC-ZAP-PQ-v1",
+  "ciphersuite": "0x01",
+  "description": "Frozen H_0/H_1/H_2 + DeriveSession outputs for fixed transcript inputs. Inputs are byte patterns (base + i mod 256) so regenerating them requires only the byte-pattern recipe. Any drift in §7 transcript or §8 KDF flips the expected values and breaks this KAT — by spec §18 such a change requires a new ciphersuite byte.",
+  "inputs": {
+    "hello_body":  { "pattern_base": "0xA0", "length": 100 },
+    "kem_init":    { "pattern_base": "0xB0", "length": 1216 },
+    "kem_reply":   { "pattern_base": "0xC0", "length": 4224 },
+    "static_pk_initiator": { "pattern_base": "0xD0", "length": 1952 },
+    "static_pk_responder": { "pattern_base": "0xE0", "length": 1952 },
+    "offered_schemes": "0x01",
+    "x25519_shared": { "pattern_base": "0x77", "length": 32 },
+    "mlkem_shared":  { "pattern_base": "0x88", "length": 32 }
+  },
+  "expected": {
+    "H_0":            "2c66c97da8c9f6a4d63c16d4d758dc319230025f22b7dad830a7964ee1f38755",
+    "H_1":            "554b425c6f55768c86876437b138d0cae5b4440ef80203bc104417737ffdc05f",
+    "H_2":            "d731407dce08ddcfcc8197023b40a4d56a7389ee946be94f91b3c29da722d88c",
+    "k_i2r":          "fc4434e8696c4aa2701b3e1c32938fcdfb030901b0761e9ae5d6a3ba35ba5b88",
+    "k_r2i":          "51bfc350c624087bd96b6ad6c36ceeea6b7d4737e2f8ffc68a9f2d398d9eb993",
+    "salt_i2r":       "1f9cc534",
+    "salt_r2i":       "b232c108",
+    "resumption_psk": "03200cfdbe6cb83571113c40a2730d6a939c6d9ffdbb5b0d95b2bae8a53d0674"
+  }
+}
