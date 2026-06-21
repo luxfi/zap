@@ -258,21 +258,30 @@ const (
 // points at the produced D->C object. A malicious server can set Phase=Committed
 // with a bogus Ref, but importSettlement of that Ref reverts on-chain (the object
 // is missing or binds to a different owner/asset/amount).
+//
+// MatchedOut is an ESTIMATE the venue reports when D has matched (PhaseMatching/
+// Committed): the orchestration "you'll receive ~N" figure the bidirectional
+// MatchResult read surfaces. It is INFORMATIONAL ONLY — exactly the QuotedOut
+// discipline extended to the match phase. The chain NEVER trusts it: the credit is
+// the recorded D->C object's amount, bound on-chain at settlement. A lying venue can
+// set MatchedOut to anything; it changes no balance (proven by the RED suite).
 type IntentStatus struct {
-	IntentID ID
-	Phase    IntentPhase
-	Ref      DExportRef // valid only when Phase==PhaseCommitted
-	Reason   string     // human-readable, for Rejected/Unknown
+	IntentID   ID
+	Phase      IntentPhase
+	Ref        DExportRef // valid only when Phase==PhaseCommitted
+	Reason     string     // human-readable, for Rejected/Unknown
+	MatchedOut uint64     // ESTIMATE (matched output) — orchestration only, never a credit
 }
 
 const (
-	isPhase  = 0   // uint8
-	isIndex  = 4   // uint32 (ref output index)
-	isIntent = 8   // bytes32 [8:40]
-	isChain  = 40  // bytes32 [40:72] ref source chain
-	isTx     = 72  // bytes32 [72:104] ref source tx
-	isReason = 104 // text (slot 8)
-	isSize   = 112
+	isPhase   = 0   // uint8
+	isIndex   = 4   // uint32 (ref output index)
+	isIntent  = 8   // bytes32 [8:40]
+	isChain   = 40  // bytes32 [40:72] ref source chain
+	isTx      = 72  // bytes32 [72:104] ref source tx
+	isMatched = 104 // uint64 (matched-out ESTIMATE — orchestration only)
+	isReason  = 112 // text (slot 8)
+	isSize    = 120
 )
 
 func buildIntentStatus(s IntentStatus) (*zaplib.Message, error) {
@@ -283,6 +292,7 @@ func buildIntentStatus(s IntentStatus) (*zaplib.Message, error) {
 	ob.SetBytesFixed(isIntent, s.IntentID[:])
 	ob.SetBytesFixed(isChain, s.Ref.SourceChainID[:])
 	ob.SetBytesFixed(isTx, s.Ref.SourceTxID[:])
+	ob.SetUint64(isMatched, s.MatchedOut)
 	ob.SetText(isReason, s.Reason)
 	ob.FinishAsRoot()
 	return zaplib.Parse(b.FinishWithFlags(MsgWatchPoll << 8))
@@ -297,6 +307,7 @@ func readIntentStatus(m *zaplib.Message) IntentStatus {
 	copy(s.Ref.SourceChainID[:], r.BytesFixedSlice(isChain, 32))
 	copy(s.Ref.SourceTxID[:], r.BytesFixedSlice(isTx, 32))
 	s.Ref.IntentID = s.IntentID
+	s.MatchedOut = r.Uint64(isMatched)
 	s.Reason = r.Text(isReason)
 	return s
 }
