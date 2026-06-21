@@ -169,3 +169,44 @@ Reference = handler latency on a serialized control-stream path
 (pre-optimization measurement, retained for context). Per-stream
 overlaps handlers in flight (peak inflight = 32 observed in
 `TestQUICCallConcurrent`).
+
+## DexSession orchestration (`dexsession/`)
+
+ZAP/Cap'n-Proto orchestration layer for the Lux DEX: capability transport +
+promise pipelining that makes the native C↔D atomic settlement flow FEEL
+synchronous, while the value boundary stays 100% native.
+
+THE HARD INVARIANT: a ZAP response is NEVER sufficient to move money. Money
+moves ONLY when C consumes a real D→C atomic export object, or D consumes a real
+C→D object. The orchestration layer holds no StateDB/AtomicState/shared-memory
+and has NO compile edge to `precompile/dex` or the EVM — it cannot import the C
+Verify path and Verify cannot import it. It traffics in VALUES (`[20]byte`
+accounts, `[32]byte` ids, `uint64` amounts) and bytes only:
+
+- `prepareSwapIntent` → 0x9999 CALLDATA the USER signs (no funds reserved, no
+  enforceable amountOut — the floor rides MinAmountOut in the signed tx).
+- `notifyIntent` → tells D to scan/import the C→D object the signed tx created;
+  cannot make a D match valid without a committed D block; returns a watch.
+- `importSettlement` → finalization CALLDATA / a tx that POINTS at a `DExportRef`;
+  the chain re-reads the real D→C object and binds recipient/asset/amount to it.
+
+`DExportRef` is a POINTER `{sourceChainID, sourceTxID, outputIndex, intentID}`,
+NOT a DFillReceipt. "No capability moves money" is provable by EXHAUSTION: the
+surface has no creditBalance/settleFill/overrideMatch/adminWithdraw method.
+Capabilities (QuoteCap/IntentCap/WatchCap/SettlementCap/AdminCap) are unforgeable
+tokens scoped to a bootstrap grant; a session cannot widen its own authority.
+
+The 60-byte atomic object wire, `DeriveIntentID`, `DeriveUTXOID`, the V4 swap
+selector (0xF3CD914C), and the Phase-A/B hookData tags are REPRODUCED as pure
+values (not imported) and pinned byte-identical to `precompile/dex` +
+`chains/dexvm` by `parity_test.go` — the "three homes" pattern, keeping the
+transport module free of the EVM/cgo dep graph.
+
+Promise pipelining (`promise.go`/`pipeline.go`): dependent calls dispatch the
+instant their inputs resolve (`thenAsync`), so `quote→prepare→notify→
+onCommitted→import` overlaps network latency; `SwapFlow`/`SwapFlowWithSender`
+wire the declarative end-to-end path. The watch streams D's result (poll/push)
+and resolves to a pointer on commit.
+
+Build/test (pure Go): `CGO_ENABLED=0 GOWORK=off go test ./dexsession/`. The
+critical adversarial proof is `TestRED_ZAP_ResponseAloneCannotMoveMoney`.
