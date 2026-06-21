@@ -160,4 +160,34 @@ func (fsn *FullServiceNode) registerHandlers() {
 		res.To = addr9999()
 		return buildSettlementResult(res)
 	})
+
+	// Route handlers — registered ONLY when the venue ALSO implements RouteVenue
+	// (composition, not interface-expansion). A base Venue without route support
+	// simply has no route frames; a route notify/poll to such a node is a dead peer
+	// (fail-closed). The route handlers report progress + the ONE final POINTER; they
+	// never credit (RouteVenue, like Venue, has no settle method).
+	if rv, ok := fsn.venue.(RouteVenue); ok {
+		fsn.node.Handle(MsgRoutePrepare, func(ctx context.Context, _ string, msg *zaplib.Message) (*zaplib.Message, error) {
+			req := readRouteRequest(msg)
+			ref, err := rv.NotifyRoute(req)
+			if err != nil {
+				// The client builds calldata locally; NotifyRoute only triggers the walk.
+				// On failure, return the deterministic intent id so the watch can report
+				// the rejection — never an error mistaken for a value claim.
+				first, _ := req.firstMarket()
+				id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, first)
+				return buildIntentWatchRef(IntentWatchRef{IntentID: id})
+			}
+			return buildIntentWatchRef(ref)
+		})
+		fsn.node.Handle(MsgRouteStatus, func(ctx context.Context, _ string, msg *zaplib.Message) (*zaplib.Message, error) {
+			intentID := readRouteWatchPoll(msg)
+			st, err := rv.RouteStatus(intentID)
+			if err != nil {
+				return buildRouteStatus(RouteStatus{IntentID: intentID, Phase: RouteUnknown, Reason: "venue unavailable"})
+			}
+			st.IntentID = intentID
+			return buildRouteStatus(st)
+		})
+	}
 }

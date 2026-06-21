@@ -52,6 +52,8 @@ const (
 	MsgPipeline   uint16 = 0xA6 // PipelineBatch -> PipelineResult
 	MsgAdminHalt  uint16 = 0xA7 // AdminRequest -> AdminStatus
 	MsgWatchPush  uint16 = 0xA8 // server-initiated watch resolution (Push)
+	MsgRoutePrepare uint16 = 0xA9 // RouteRequest -> PreparedIntent (route-intent calldata)
+	MsgRouteStatus  uint16 = 0xAA // RouteWatchRef -> RouteStatus (hop progress + final ref)
 )
 
 // --- Value-boundary primitives (reproduced as values; pinned by parity test) -
