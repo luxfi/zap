@@ -109,73 +109,28 @@ func wordI256FromInt64(v int64) abiWord {
 // Route-intent path encoding.
 // ----------------------------------------------------------------------------
 //
-// A V4 route is a SWAP INTENT (DI01 / Phase A) whose hookData body carries the
-// multi-market PATH the D-Chain router walks. The V4 hookData is DESIGNED to carry a
-// routing payload, and the precompile's decodeSwapPhase returns the bytes after the
-// DI01 tag as the phase body — so a route rides the EXISTING swap selector and the
-// EXISTING intent phase, with the path as the body. No new on-chain selector or tag
-// is invented: to the C-side lock, a route intent is a plain intent that creates ONE
-// C->D input object; the D-Chain router reads the path body to walk A->B->C and
-// produces ONE final D->C export.
+// A V4 route's ON-CHAIN leg is a PLAIN SWAP INTENT (DI01 / Phase A) on the ENTRY market:
+// it locks the single input and creates ONE C->D input object, identically to a normal
+// single-market intent. The multi-market PATH is NOT carried in the signed on-chain
+// hookData — it travels to the D-Chain router over the ZAP CONTROL PLANE (the RouteRequest
+// envelope: buildRouteRequest / NotifyRoute, MsgRoutePrepare). Two reasons this is the
+// correct seam:
 //
-// This is the structural reason multi-hop "stays on D": there is ONE C->D object
-// (the input) and ONE D->C object (the final output / refund). Intermediate hops are
-// D-internal matching state; they never create a C-side object, so the money plane
-// sees exactly 1-in / 1-out regardless of hop count.
-
-// routePathDomain tags the route-path body inside a DI01 intent hookData. It follows
-// the DI01 tag so the precompile still classifies the hookData as a Phase-A intent
-// (the tag is DI01); the route marker + path are the intent BODY the D router reads.
-var routePathMarker = [4]byte{'R', 'T', '0', '1'}
-
-// EncodeRouteIntentHookData builds a route-intent hookData: the DI01 intent tag,
-// then a route marker, then the path (an ordered list of marketIDs A->B->C the D
-// router walks). The leading DI01 keeps the on-chain phase classification as INTENT
-// (creates ONE C->D object); the body is the path for D's router.
+//  1. The on-chain precompile has NO route-marker awareness. Its decodeIntentBody accepts
+//     only a DI01 body of width {0, 32, 64} (empty / deadline / deadline+nonce); a route
+//     body (a marker + hop count + path) is a different width and REVERTS on-chain. So an
+//     on-chain RT01 body would brick every multi-hop swap. (This was the bug.)
+//  2. The path is D-matcher orchestration that moves NO C-side value, and the on-chain
+//     intent id (DeriveIntentID) binds the ENTRY market + nonce, NOT the path — so a plain
+//     DI01 intent on the entry market yields the SAME id the route session computed. The
+//     path therefore does not belong in the consensus-visible calldata.
 //
-//	DI01(4) || RT01(4) || hopCount(4, big-endian) || marketID[0](32) || ... || marketID[n-1](32)
-//
-// The body is the ROUTING PAYLOAD — orchestration the D matcher consumes. It moves no
-// value; it only directs how D walks the single input through markets to one output.
-func EncodeRouteIntentHookData(path []ID) []byte {
-	out := make([]byte, 0, 4+4+4+len(path)*32)
-	out = append(out, intentPhaseTag[:]...)  // DI01: Phase-A intent classification
-	out = append(out, routePathMarker[:]...) // RT01: route body marker
-	var c [4]byte
-	binary.BigEndian.PutUint32(c[:], uint32(len(path)))
-	out = append(out, c[:]...)
-	for _, m := range path {
-		out = append(out, m[:]...)
-	}
-	return out
-}
-
-// DecodeRouteIntentHookData is the inverse: it extracts the route path from a
-// route-intent hookData, or ok=false if the bytes are not a DI01+RT01 route body.
-// The D router uses this to recover the path; the session uses it to verify the
-// calldata it built carries exactly the requested path (defence against a corrupted
-// build). It reads only — it moves nothing.
-func DecodeRouteIntentHookData(hookData []byte) (path []ID, ok bool) {
-	const hdr = 4 + 4 + 4
-	if len(hookData) < hdr {
-		return nil, false
-	}
-	if string(hookData[0:4]) != string(intentPhaseTag[:]) {
-		return nil, false
-	}
-	if string(hookData[4:8]) != string(routePathMarker[:]) {
-		return nil, false
-	}
-	n := int(binary.BigEndian.Uint32(hookData[8:12]))
-	if n < 0 || hdr+n*32 != len(hookData) {
-		return nil, false
-	}
-	path = make([]ID, n)
-	for i := 0; i < n; i++ {
-		copy(path[i][:], hookData[hdr+i*32:hdr+(i+1)*32])
-	}
-	return path, true
-}
+// This is the structural reason multi-hop "stays on D": there is ONE C->D object (the
+// input) and ONE D->C object (the final output / refund). Intermediate hops are D-internal
+// matching state; they never create a C-side object, so the money plane sees exactly
+// 1-in / 1-out regardless of hop count. The path's canonical wire is the RouteRequest
+// envelope (v4route.go) — there is exactly ONE place the path is serialized for the venue,
+// and it is not the on-chain hookData.
 
 // DeriveRoutePathHash hashes a route path (the ordered marketID list) into a scope
 // PoolKeyHash. Two routes with different paths derive different session ids, so a
