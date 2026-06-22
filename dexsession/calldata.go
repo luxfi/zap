@@ -42,9 +42,14 @@ var (
 	settlementPhaseTag = [4]byte{'D', 'S', '0', '1'}
 )
 
-// settlementBodyLen is the fixed Phase-B body width: outputID(32) | amount(32).
-// IDENTICAL to precompile/dex/settle_hookdata.go settlementBodyLen.
-const settlementBodyLen = 32 + 32
+// settlementBodyLen is the fixed Phase-B body width: outputID(32) | amount(32) |
+// intentID(32). IDENTICAL to precompile/dex/settle_hookdata.go settlementBodyLen. The
+// intentID word binds the credit to the taker's OWN intent record on-chain (the per-taker
+// cap + the deadline gate); omitting it makes the body 64 bytes, which the precompile's
+// decodeSettlementBody REJECTS (len != 96 -> ErrSettleBodyMalformed) and the settle tx
+// REVERTS. The three-homes parity test (calldata_parity_test) pins this width against a
+// hardcoded vector so a one-sided drift trips a red test before any wallet signs bad bytes.
+const settlementBodyLen = 32 + 32 + 32
 
 // EncodeIntentHookData builds an explicit Phase-A hookData carrying the deadline and the
 // intent NONCE. BYTE-IDENTICAL to precompile/dex EncodeIntentHookData — both sides MUST
@@ -77,24 +82,28 @@ func EncodeIntentHookData(deadline, nonce uint64) []byte {
 	return out
 }
 
-// EncodeSettlementHookData builds a Phase-B hookData: tag + outputID + amount.
-// Byte-identical to precompile/dex EncodeSettlementHookData. amount is right-
-// aligned in a uint256 word (the low 8 bytes), matching the precompile's
-// binary.BigEndian.PutUint64(amt[24:32], amount).
+// EncodeSettlementHookData builds a Phase-B hookData: tag + outputID + amount + intentID.
+// Byte-identical to precompile/dex EncodeSettlementHookData (the INVERSE of its
+// decodeSettlementBody). amount is right-aligned in a uint256 word (the low 8 bytes),
+// matching the precompile's binary.BigEndian.PutUint64(amt[24:32], amount). intentID names
+// the originating C->D intent the settlement draws against — the precompile binds the credit
+// to that taker's intent record (the per-taker cap + the deadline gate), so it is REQUIRED;
+// a body without it is the wrong width and the on-chain decode reverts.
 //
-// CRITICAL: the body carries ONLY outputID + amount. The output ASSET and the
-// RECIPIENT are NOT wire fields — on-chain the asset is derived from the swap
-// direction and the recipient is the CALLER. So this calldata cannot name a
-// victim's recipient or a re-denominated asset; ImportSettlement binds even
-// outputID+amount against the RECORDED object. (This is why a tampered DExportRef
-// cannot substitute recipient/asset/amount — see the package invariant.)
-func EncodeSettlementHookData(outputID ID, amount uint64) []byte {
+// CRITICAL: the body carries outputID + amount + intentID, but NOT the output ASSET or the
+// RECIPIENT — on-chain the asset is derived from the swap direction and the recipient is the
+// CALLER. So this calldata cannot name a victim's recipient or a re-denominated asset;
+// ImportSettlement binds outputID/amount/intentID against the RECORDED object + the recorded
+// owner's intent. (This is why a tampered DExportRef cannot substitute recipient/asset/amount
+// — see the package invariant.)
+func EncodeSettlementHookData(outputID ID, amount uint64, intentID ID) []byte {
 	out := make([]byte, 0, 4+settlementBodyLen)
 	out = append(out, settlementPhaseTag[:]...)
 	out = append(out, outputID[:]...)
 	var amt [32]byte
 	binary.BigEndian.PutUint64(amt[24:32], amount)
 	out = append(out, amt[:]...)
+	out = append(out, intentID[:]...)
 	return out
 }
 

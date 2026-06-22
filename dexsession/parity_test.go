@@ -125,24 +125,35 @@ func TestParity_DeriveUTXOID(t *testing.T) {
 
 // TestParity_SettlementHookData pins the Phase-B hookData against
 // precompile/dex/settle_hookdata.go: tag "DS01" + outputID(32) + amount-word(32,
-// amount in low 8 bytes). And confirms Phase A is the explicit "DI01" tag.
+// amount in low 8 bytes) + intentID(32). The intentID word is what binds the credit to
+// the taker's intent on-chain (the per-taker cap + deadline gate); a body without it is
+// 64 bytes and the precompile reverts (ErrSettleBodyMalformed). This pins the FULL 96-byte
+// body so a one-sided drift (the bug: zap emitting 64 while the precompile decodes 96) is
+// caught here. Also confirms Phase A is the explicit "DI01" tag.
 func TestParity_SettlementHookData(t *testing.T) {
 	outputID := ID{0xfe, 0xed}
 	outputID[31] = 0x01
 	amount := uint64(424242)
+	intentID := ID{0x1A, 0x2B, 0x3C}
+	intentID[31] = 0x09
 
-	hook := EncodeSettlementHookData(outputID, amount)
-	want := make([]byte, 0, 4+64)
+	hook := EncodeSettlementHookData(outputID, amount, intentID)
+	want := make([]byte, 0, 4+settlementBodyLen)
 	want = append(want, 'D', 'S', '0', '1')
 	want = append(want, outputID[:]...)
 	var amt [32]byte
 	binary.BigEndian.PutUint64(amt[24:32], amount)
 	want = append(want, amt[:]...)
+	want = append(want, intentID[:]...)
 	if !bytes.Equal(hook, want) {
 		t.Fatalf("settlement hookData mismatch:\n got %x\nwant %x", hook, want)
 	}
 	if len(hook) != 4+settlementBodyLen {
 		t.Fatalf("settlement hookData len = %d, want %d", len(hook), 4+settlementBodyLen)
+	}
+	if settlementBodyLen != 96 {
+		t.Fatalf("settlementBodyLen = %d, want 96 (outputID|amount|intentID) — must match "+
+			"precompile/dex/settle_hookdata.go or the settle calldata reverts on-chain", settlementBodyLen)
 	}
 
 	// Phase A with deadline 0, nonce 0 is the bare DI01 tag (minimal-width).
@@ -168,7 +179,7 @@ func TestParity_SwapSelector(t *testing.T) {
 		t.Fatalf("SelectorSwap = %08X, want F3CD914C", SelectorSwap)
 	}
 	pk := testPoolKey()
-	calldata := EncodeSwapCalldata(pk, true, 1000, EncodeSettlementHookData(ID{0x01}, 7))
+	calldata := EncodeSwapCalldata(pk, true, 1000, EncodeSettlementHookData(ID{0x01}, 7, ID{0x02}))
 	if got := binary.BigEndian.Uint32(calldata[:4]); got != SelectorSwap {
 		t.Fatalf("calldata selector = %08X, want %08X", got, SelectorSwap)
 	}

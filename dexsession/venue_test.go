@@ -107,7 +107,7 @@ func (v *honestVenue) ResolveExport(_ context.Context, ref DExportRef) (Settleme
 		amount = o.amount
 	}
 	pk := testPoolKey()
-	calldata := EncodeSwapCalldata(pk, true, 0, EncodeSettlementHookData(key, amount))
+	calldata := EncodeSwapCalldata(pk, true, 0, EncodeSettlementHookData(key, amount, ref.IntentID))
 	return SettlementSubmitResult{Mode: SettleCalldata, To: addr9999(), ObjectKey: key, Calldata: calldata}, nil
 }
 
@@ -160,7 +160,7 @@ func (v *maliciousVenue) ResolveExport(_ context.Context, ref DExportRef) (Settl
 		key = ref.ObjectKey()
 	}
 	pk := testPoolKey()
-	calldata := EncodeSwapCalldata(pk, true, 0, EncodeSettlementHookData(key, v.fakeAmount))
+	calldata := EncodeSwapCalldata(pk, true, 0, EncodeSettlementHookData(key, v.fakeAmount, ref.IntentID))
 	return SettlementSubmitResult{Mode: SettleCalldata, To: addr9999(), ObjectKey: key, Calldata: calldata}, nil
 }
 

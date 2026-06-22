@@ -211,14 +211,17 @@ func TestZAP_ImportSettlement_CannotSubstituteRecipientAssetAmount(t *testing.T)
 }
 
 // settlementCalldataFor builds 0x9999 settlement calldata pointing at key for
-// amount (the bytes a wallet would sign). Helper for the substitution test.
+// amount (the bytes a wallet would sign). Helper for the substitution test. The
+// intentID word is left zero: these tests exercise the owner/asset/amount object-bind
+// (the substitution rejections), which are independent of the intent binding, and the
+// mock ledger's decode does not consult the intentID word.
 func settlementCalldataFor(key ID, amount uint64) SettlementSubmitResult {
 	pk := testPoolKey()
 	return SettlementSubmitResult{
 		Mode:      SettleCalldata,
 		To:        addr9999(),
 		ObjectKey: key,
-		Calldata:  EncodeSwapCalldata(pk, true, 0, EncodeSettlementHookData(key, amount)),
+		Calldata:  EncodeSwapCalldata(pk, true, 0, EncodeSettlementHookData(key, amount, ID{})),
 	}
 }
 
