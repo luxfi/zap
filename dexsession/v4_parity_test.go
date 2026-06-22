@@ -113,75 +113,43 @@ func TestParity_V4_ModifyLiquidityCalldata(t *testing.T) {
 	}
 }
 
-// TestParity_V4_RouteIntentHookData pins the route-intent hookData: DI01 (the on-chain
-// Phase-A intent tag, so the precompile still classifies it as an INTENT) followed by
-// the RT01 route marker, the hop count, and the path. Round-trips the path out.
-func TestParity_V4_RouteIntentHookData(t *testing.T) {
-	path := []ID{{0x4D, 0x01}, {0x4D, 0x02}, {0x4D, 0x03}}
-	hook := EncodeRouteIntentHookData(path)
-
-	// The hookData MUST begin with DI01 so the precompile's decodeSwapPhase classifies
-	// it as a Phase-A intent (creates ONE C->D object); the route body follows.
-	if !bytes.Equal(hook[0:4], []byte{'D', 'I', '0', '1'}) {
-		t.Fatalf("route hookData does not lead with DI01: %x", hook[0:4])
-	}
-	// Then the RT01 route marker.
-	if !bytes.Equal(hook[4:8], []byte{'R', 'T', '0', '1'}) {
-		t.Fatalf("route hookData missing RT01 marker: %x", hook[4:8])
-	}
-	// Then the hop count (big-endian uint32).
-	if n := binary.BigEndian.Uint32(hook[8:12]); n != 3 {
-		t.Fatalf("route hop count = %d, want 3", n)
-	}
-	// Then the path verbatim.
-	for i, m := range path {
-		off := 12 + i*32
-		if !bytes.Equal(hook[off:off+32], m[:]) {
-			t.Fatalf("route path hop %d mismatch", i)
+// TestParity_V4_RouteOnChainIsPlainIntent pins the RT01 scoping fix: a route's ON-CHAIN
+// leg is a PLAIN DI01 intent on the entry market — a body width the precompile's
+// decodeIntentBody ACCEPTS ({0,32,64}) — NOT a route-path body. The precompile has no
+// route-marker awareness, so an RT01 path body (a marker + hop count + path) would be a
+// width decodeIntentBody REJECTS and the swap would REVERT on-chain. The path instead
+// travels to the D router over the ZAP control plane (the RouteRequest envelope), which is
+// the one and only place it is serialized for the venue. This test is the regression guard
+// against re-introducing an on-chain route-path body.
+func TestParity_V4_RouteOnChainIsPlainIntent(t *testing.T) {
+	// The on-chain intent body a route now signs is the plain DI01 body (deadline+nonce).
+	// Build it the same way prepareRouteLocal does and assert it is a precompile-accepted
+	// width and carries NO route marker.
+	for _, tc := range []struct {
+		deadline, nonce uint64
+		wantLen         int
+	}{
+		{0, 0, 4},        // DI01 tag only
+		{1 << 40, 0, 36}, // DI01 + deadline
+		{1 << 40, 7, 68}, // DI01 + deadline + nonce
+	} {
+		hook := EncodeIntentHookData(tc.deadline, tc.nonce)
+		if len(hook) != tc.wantLen {
+			t.Fatalf("route on-chain intent body (deadline=%d nonce=%d) len=%d, want %d",
+				tc.deadline, tc.nonce, len(hook), tc.wantLen)
 		}
-	}
-	// Total length is exact (no trailing slop).
-	if len(hook) != 12+3*32 {
-		t.Fatalf("route hookData len = %d, want %d", len(hook), 12+3*32)
-	}
-
-	// Round-trip via the decoder.
-	got, ok := DecodeRouteIntentHookData(hook)
-	if !ok || len(got) != 3 {
-		t.Fatalf("route hookData round-trip: ok=%v len=%d", ok, len(got))
-	}
-	for i := range got {
-		if got[i] != path[i] {
-			t.Fatalf("route hookData round-trip hop %d mismatch", i)
+		// It is a Phase-A intent (DI01-led) the precompile classifies as INTENT.
+		if !bytes.Equal(hook[0:4], []byte{'D', 'I', '0', '1'}) {
+			t.Fatalf("route on-chain intent must lead with DI01, got %x", hook[0:4])
 		}
-	}
-	// A corrupt hop count (claims 5, has 3) is rejected (fail-closed, no over-read).
-	bad := append([]byte(nil), hook...)
-	binary.BigEndian.PutUint32(bad[8:12], 5)
-	if _, ok := DecodeRouteIntentHookData(bad); ok {
-		t.Fatalf("route decoder accepted a mismatched hop count")
-	}
-	// A non-route intent (plain DI01) is NOT a route body.
-	if _, ok := DecodeRouteIntentHookData(EncodeIntentHookData(0, 0)); ok {
-		t.Fatalf("plain DI01 decoded as a route")
-	}
-}
-
-// TestParity_V4_RouteIntentIsPhaseAOnChain proves the route intent is, to the on-chain
-// phase classifier, a PLAIN Phase-A INTENT. This is the structural guarantee that a
-// route creates exactly ONE C->D object (no settlement, no second object): the
-// precompile sees DI01 and classifies INTENT; the route body is the intent's body. We
-// model decodeSwapPhase's rule (leading DI01 => intent) and assert it holds.
-func TestParity_V4_RouteIntentIsPhaseAOnChain(t *testing.T) {
-	path := []ID{{0x01}, {0x02}}
-	hook := EncodeRouteIntentHookData(path)
-	// Model the precompile's decodeSwapPhase: DI01-led hookData => Phase A (intent).
-	// (settlement requires the DS01 tag; a route hookData NEVER carries DS01.)
-	if len(hook) < 4 || !bytes.Equal(hook[0:4], []byte{'D', 'I', '0', '1'}) {
-		t.Fatalf("route hookData is not DI01-classified as intent")
-	}
-	if bytes.Contains(hook, []byte{'D', 'S', '0', '1'}) {
-		t.Fatalf("route hookData contains a DS01 settlement tag — a route must NEVER settle on the input leg")
+		// It carries NO RT01 route marker and NO DS01 settlement tag — a route's input leg
+		// is a clean intent, and the path is not in the signed calldata.
+		if bytes.Contains(hook, []byte{'R', 'T', '0', '1'}) {
+			t.Fatalf("route on-chain intent must NOT carry an RT01 path body (the precompile reverts on it)")
+		}
+		if bytes.Contains(hook, []byte{'D', 'S', '0', '1'}) {
+			t.Fatalf("route on-chain intent must NOT carry a DS01 settlement tag")
+		}
 	}
 }
 

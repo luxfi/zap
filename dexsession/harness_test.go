@@ -304,7 +304,9 @@ func decodeSettlementCalldata(calldata []byte) (outputID ID, amount uint64, ok b
 		return ID{}, 0, false
 	}
 	hook := calldata[bodyOff : bodyOff+hookLen]
-	// Phase-B: tag(4) + outputID(32) + amount(32).
+	// Phase-B: tag(4) + outputID(32) + amount(32) + intentID(32). The mock binds on
+	// outputID + amount; the intentID word (hook[68:100]) is consumed on-chain by the
+	// per-taker cap and is not needed for the substitution properties under test here.
 	if len(hook) != 4+settlementBodyLen {
 		return ID{}, 0, false
 	}
