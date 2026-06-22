@@ -85,9 +85,12 @@ func TestWire_PreparedIntent_RoundTrip(t *testing.T) {
 		AssetIn: fillID(0x01), MarketID: fillID(0x4D),
 		Calldata: bytes.Repeat([]byte{0xCA}, 200), HookData: []byte{'D', 'I', '0', '1'},
 	}
-	m, err := buildPreparedIntent(in)
+	m, err := buildPreparedIntent(in, MsgPrepare)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if route := m.Flags() >> 8; route != MsgPrepare {
+		t.Fatalf("PreparedIntent route flag: got 0x%X want 0x%X", route, MsgPrepare)
 	}
 	got := readPreparedIntent(m)
 	// Compare field by field (slices need bytes.Equal).
@@ -101,6 +104,35 @@ func TestWire_PreparedIntent_RoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got.HookData, in.HookData) {
 		t.Fatalf("PreparedIntent.HookData: got %x want %x", got.HookData, in.HookData)
+	}
+}
+
+// TestWire_PreparedIntent_RouteFlags proves the same PreparedIntent payload,
+// finalized under each route the dispatcher serves, carries the correct flag in
+// Flags()>>8 and still round-trips every field. This replaces the old fixed-
+// offset [6:8] byte-patch retag with the FinishWithFlags idiom: the flag must
+// survive build->parse for both MsgPrepare (the prepare call) and MsgNotify
+// (NotifyIntent), and the body must be untouched by the route choice.
+func TestWire_PreparedIntent_RouteFlags(t *testing.T) {
+	in := PreparedIntent{
+		To: fillAcct(0x99), IntentID: fillID(0x4B), QuotedOut: 12345, AmountIn: 1_000_000,
+		DChainID: fillID(0xD0), CChainID: fillID(0xC0), Account: fillAcct(0xAA), Recipient: fillAcct(0xBB),
+		AssetIn: fillID(0x01), MarketID: fillID(0x4D),
+		Calldata: bytes.Repeat([]byte{0xCA}, 200), HookData: []byte{'D', 'I', '0', '1'},
+	}
+	for _, msgType := range []uint16{MsgPrepare, MsgNotify} {
+		m, err := buildPreparedIntent(in, msgType)
+		if err != nil {
+			t.Fatalf("buildPreparedIntent(%#x): %v", msgType, err)
+		}
+		if route := m.Flags() >> 8; route != msgType {
+			t.Fatalf("route flag for %#x: got 0x%X want 0x%X", msgType, route, msgType)
+		}
+		got := readPreparedIntent(m)
+		if got.IntentID != in.IntentID || got.MarketID != in.MarketID || got.AmountIn != in.AmountIn ||
+			!bytes.Equal(got.Calldata, in.Calldata) || !bytes.Equal(got.HookData, in.HookData) {
+			t.Fatalf("payload not preserved across route %#x:\n got %+v\nwant %+v", msgType, got, in)
+		}
 	}
 }
 

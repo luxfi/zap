@@ -324,12 +324,8 @@ func (s *clientSession) NotifyIntent(ctx context.Context, intent *Promise[Prepar
 		if err := s.requireGrant(AuthIntent); err != nil {
 			return IntentWatch{}, err
 		}
-		reqMsg, err := buildPreparedIntent(pi)
-		if err != nil {
-			return IntentWatch{}, err
-		}
-		// retag as a notify (the server routes on msgType).
-		notifyMsg, err := retag(reqMsg, MsgNotify)
+		// The server routes on msgType (Flags()>>8); NotifyIntent is MsgNotify.
+		notifyMsg, err := buildPreparedIntent(pi, MsgNotify)
 		if err != nil {
 			return IntentWatch{}, err
 		}
@@ -407,18 +403,3 @@ func zeroForOneFor(req SwapIntentRequest) bool {
 	return true
 }
 
-// retag rebuilds a message under a different msgType flag. The ZAP dispatcher
-// routes on Flags()>>8, so a PreparedIntent built for MsgPrepare must be retagged
-// MsgNotify before NotifyIntent's Call. The flags word lives at header bytes
-// [6:8] little-endian and equals msgType<<8 (low byte 0, high byte msgType); no
-// internal field offset references the header, so copying the buffer and patching
-// only the flag word is byte-safe. We re-Parse to revalidate.
-func retag(msg *zaplib.Message, msgType uint16) (*zaplib.Message, error) {
-	src := msg.Bytes()
-	buf := make([]byte, len(src))
-	copy(buf, src)
-	flags := msgType << 8
-	buf[6] = byte(flags)      // low byte = 0
-	buf[7] = byte(flags >> 8) // high byte = msgType
-	return zaplib.Parse(buf)
-}
