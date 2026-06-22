@@ -37,10 +37,14 @@ type SwapIntentRequest struct {
 	MinAmountOut uint64  // taker slippage floor — encoded into the signed tx
 	Recipient    Account // where the D->C settlement must credit
 	Deadline     uint64
-	// CallIndex disambiguates two swaps in one tx — matches the precompile's
-	// per-tx CallIndex. The user's wallet sets it; off-chain prepare uses 0 for a
-	// single-call tx and the caller overrides for batched calls.
-	CallIndex uint32
+	// Nonce is the taker's intent disambiguator, carried in the swap's DI01 hookData and
+	// folded into DeriveIntentID. It makes the intent id CHAIN-OBSERVABLE — the off-chain
+	// prepare derives the SAME id the on-chain SubmitSwapIntent mints (the watch then
+	// correlates against the live chain), and it distinguishes two otherwise-identical
+	// swaps. The user's wallet sets it (a per-account order nonce); 0 for a single swap.
+	// It REPLACES the former CallIndex (which depended on the unknown-pre-signing txID
+	// ordering and so could not be reproduced off-chain).
+	Nonce uint64
 }
 
 // PreparedIntent is the OUTPUT of prepareSwapIntent: everything the user needs to
@@ -134,31 +138,32 @@ func readPreparedIntent(m *zaplib.Message) PreparedIntent {
 	return p
 }
 
-// the SwapIntentRequest envelope (client -> server for MsgPrepare).
+// the SwapIntentRequest envelope (client -> server for MsgPrepare). sirNonce is a
+// uint64 (the intent disambiguator), replacing the former uint32 callIndex.
 const (
 	sirNet       = 0   // uint32
-	sirCallIdx   = 4   // uint32
 	sirAmountIn  = 8   // uint64
 	sirMinOut    = 16  // uint64
 	sirDeadline  = 24  // uint64
-	sirCChain    = 32  // bytes32 [32:64]
-	sirDChain    = 64  // bytes32 [64:96]
-	sirAccount   = 96  // bytes20 [96:116]
-	sirAssetIn   = 116 // bytes32 [116:148]
-	sirAssetAddr = 148 // bytes20 [148:168]
-	sirMarket    = 168 // bytes32 [168:200]
-	sirRecipient = 200 // bytes20 [200:220]
-	sirSize      = 220
+	sirNonce     = 32  // uint64
+	sirCChain    = 40  // bytes32 [40:72]
+	sirDChain    = 72  // bytes32 [72:104]
+	sirAccount   = 104 // bytes20 [104:124]
+	sirAssetIn   = 124 // bytes32 [124:156]
+	sirAssetAddr = 156 // bytes20 [156:176]
+	sirMarket    = 176 // bytes32 [176:208]
+	sirRecipient = 208 // bytes20 [208:228]
+	sirSize      = 228
 )
 
 func buildSwapIntentRequest(r SwapIntentRequest) (*zaplib.Message, error) {
 	b := zaplib.NewBuilder(sirSize + 256)
 	ob := b.StartObject(sirSize)
 	ob.SetUint32(sirNet, r.NetworkID)
-	ob.SetUint32(sirCallIdx, r.CallIndex)
 	ob.SetUint64(sirAmountIn, r.AmountIn)
 	ob.SetUint64(sirMinOut, r.MinAmountOut)
 	ob.SetUint64(sirDeadline, r.Deadline)
+	ob.SetUint64(sirNonce, r.Nonce)
 	ob.SetBytesFixed(sirCChain, r.CChainID[:])
 	ob.SetBytesFixed(sirDChain, r.DChainID[:])
 	ob.SetBytesFixed(sirAccount, r.Account[:])
@@ -174,10 +179,10 @@ func readSwapIntentRequest(m *zaplib.Message) SwapIntentRequest {
 	r := m.Root()
 	var out SwapIntentRequest
 	out.NetworkID = r.Uint32(sirNet)
-	out.CallIndex = r.Uint32(sirCallIdx)
 	out.AmountIn = r.Uint64(sirAmountIn)
 	out.MinAmountOut = r.Uint64(sirMinOut)
 	out.Deadline = r.Uint64(sirDeadline)
+	out.Nonce = r.Uint64(sirNonce)
 	copy(out.CChainID[:], r.BytesFixedSlice(sirCChain, 32))
 	copy(out.DChainID[:], r.BytesFixedSlice(sirDChain, 32))
 	copy(out.Account[:], r.BytesFixedSlice(sirAccount, 20))

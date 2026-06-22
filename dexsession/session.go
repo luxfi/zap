@@ -277,23 +277,20 @@ func (s *clientSession) prepareLocal(ctx context.Context, req SwapIntentRequest)
 		quoted = qr.AmountOut
 	}
 
-	// Derive the intent id identically to the on-chain SubmitSwapIntent.
+	// Derive the intent id identically to the on-chain SubmitSwapIntent. The id is now
+	// CHAIN-OBSERVABLE: it binds the economic identity (account/asset/amount/market) plus
+	// the taker's NONCE — which we ALSO put in the swap's DI01 hookData — and NO txID. So
+	// this off-chain id EQUALS the on-chain id the user's tx will mint, and the watch
+	// correlates against the live chain exactly. (Previously a zero-txID placeholder here
+	// could never equal the chain's real-txID id, so the watch was structurally broken.)
 	intentID := DeriveIntentID(
 		req.NetworkID, req.CChainID, req.DChainID,
-		// txID is unknown until the user signs/sends; the on-chain derivation uses
-		// the real txID + callIndex. The off-chain prepared id is the PARTIAL
-		// binding the watch correlates on; the authoritative id is minted on-chain.
-		// We bind the known economic identity (account/asset/amount/market) so the
-		// watch can match the emitted IntentSubmitted event by these fields even
-		// before the final txID is known. The zero txID here is a placeholder the
-		// watch tolerates (it matches on the economic tuple, see watch.go).
-		ID{}, req.CallIndex,
-		req.Account, req.AssetIn, req.AmountIn, req.MarketID,
+		req.Account, req.AssetIn, req.AmountIn, req.MarketID, req.Nonce,
 	)
 
-	// Phase A hookData (intent). Empty selects Phase A; we emit the explicit tag so
-	// the intent is unambiguous on-chain.
-	hookData := EncodeIntentHookData()
+	// Phase A hookData (intent) carrying the SAME deadline + nonce the id binds, so the
+	// on-chain precompile re-derives the identical id from this calldata.
+	hookData := EncodeIntentHookData(req.Deadline, req.Nonce)
 	calldata := EncodeSwapCalldata(pk, zeroForOneFor(req), req.AmountIn, hookData)
 
 	return PreparedIntent{
