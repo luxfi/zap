@@ -5,6 +5,7 @@ package dexsession
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 )
 
@@ -13,6 +14,44 @@ import (
 // given an 8-byte slot clobbers the next field) — the exact class of bug that
 // must never reach the value-boundary id derivation, since a corrupted intent id
 // would name the wrong object.
+
+// intentIDGolden is the cross-repo golden intent id: SHA-256 over the canonical
+// DeriveIntentID preimage with the FIXED inputs in TestIntentID_OffChainEqualsOnChain.
+// It is reproduced byte-for-byte by precompile/dex's TestIntentID_OffChainEqualsOnChain
+// (the on-chain DeriveIntentID). dexsession cannot import precompile/dex (it would drag the
+// EVM+geth+cgo graph into the transport module and create a compile edge to the C Verify
+// path — both forbidden), so the two implementations are pinned to ONE shared golden: if
+// either side's id derivation drifts, its half of this test fails. This is the value-boundary
+// contract — the off-chain pointer MUST name the same object the chain mints.
+const intentIDGolden = "5b0e8d3828def79d10b8ea811c422d702c58125508a6de78c5ae3a4b691ce016"
+
+// TestIntentID_OffChainEqualsOnChain proves the off-chain (dexsession) DeriveIntentID equals
+// the on-chain (precompile) DeriveIntentID for the SAME inputs, via the shared golden. The
+// FIXED inputs here are IDENTICAL to the precompile-side twin; both must hash to
+// intentIDGolden. (The watch-correlation contract for non-fee-on-transfer inputs, where
+// locked == amountIn — see DeriveIntentID's fee-on-transfer caveat.)
+func TestIntentID_OffChainEqualsOnChain(t *testing.T) {
+	var c, d ID
+	c[0], c[31] = 0xC0, 0x01
+	d[0], d[31] = 0xD0, 0x02
+	var acct Account
+	acct[19] = 0xAA // 0x00..00AA
+	var assetIn ID
+	for i := range assetIn {
+		assetIn[i] = byte(0x30 + i)
+	}
+	var market ID
+	for i := range market {
+		market[i] = byte(0x70 + i)
+	}
+	got := DeriveIntentID(96369, c, d, acct, assetIn, 1_000_000, market, 7)
+	if hex.EncodeToString(got[:]) != intentIDGolden {
+		t.Fatalf("off-chain DeriveIntentID diverged from the on-chain golden:\n got %s\nwant %s\n"+
+			"the off-chain pointer would name a different object than the chain mints — fix the "+
+			"derivation to match precompile/dex/native_wire.go DeriveIntentID.",
+			hex.EncodeToString(got[:]), intentIDGolden)
+	}
+}
 
 func TestWire_QuoteRequest_RoundTrip(t *testing.T) {
 	in := QuoteRequest{MarketID: fillID(0xA1), AmountIn: 123456789, ZeroForOne: true}
