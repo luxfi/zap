@@ -101,21 +101,23 @@ const nativeIntentDomain = "lux.dex.native.intent.v1"
 // DeriveIntentID computes the deterministic id of a C->D atomic intent object,
 // byte-identical to precompile/dex/native_wire.go DeriveIntentID:
 //
-//	SHA-256( domain | networkID | cChainID | dChainID | txID | callIndex |
-//	         account | assetIn | amountIn | marketID )
+//	SHA-256( domain | networkID | cChainID | dChainID |
+//	         account | assetIn | amountIn | marketID | nonce )
 //
-// Every component is fixed width and length-stable. dexsession derives it so a
-// PreparedIntent can carry the id the user's signed C tx will mint and the watch
-// can locate the matching D result — it is a NAME, never an authority.
+// Every component is fixed width and length-stable. There is NO txID: the id is
+// CHAIN-OBSERVABLE — dexsession derives the SAME id the on-chain SubmitSwapIntent mints,
+// from values known BEFORE the user signs (the nonce carried in the swap's DI01
+// hookData), so the watch correlates against the live chain. (Previously dexsession
+// substituted a zero txID while the chain used the real one, so the ids never matched.)
+// It is a NAME, never an authority.
 func DeriveIntentID(
 	networkID uint32,
 	cChainID, dChainID ID,
-	txID ID,
-	callIndex uint32,
 	account Account,
 	assetIn ID,
 	amountIn uint64,
 	marketID ID,
+	nonce uint64,
 ) ID {
 	h := sha256.New()
 	h.Write([]byte(nativeIntentDomain))
@@ -124,15 +126,14 @@ func DeriveIntentID(
 	h.Write(u4[:])
 	h.Write(cChainID[:])
 	h.Write(dChainID[:])
-	h.Write(txID[:])
-	binary.BigEndian.PutUint32(u4[:], callIndex)
-	h.Write(u4[:])
 	h.Write(account[:])
 	h.Write(assetIn[:])
 	var u8 [8]byte
 	binary.BigEndian.PutUint64(u8[:], amountIn)
 	h.Write(u8[:])
 	h.Write(marketID[:])
+	binary.BigEndian.PutUint64(u8[:], nonce)
+	h.Write(u8[:])
 	var out ID
 	copy(out[:], h.Sum(nil))
 	return out

@@ -64,7 +64,7 @@ func TestWire_StateResult_RoundTrip(t *testing.T) {
 
 func TestWire_SwapIntentRequest_RoundTrip(t *testing.T) {
 	in := SwapIntentRequest{
-		NetworkID: 96369, CallIndex: 7, AmountIn: 1_000_000, MinAmountOut: 990_000, Deadline: 1 << 40,
+		NetworkID: 96369, Nonce: 7, AmountIn: 1_000_000, MinAmountOut: 990_000, Deadline: 1 << 40,
 		CChainID: fillID(0xC0), DChainID: fillID(0xD0), Account: fillAcct(0xAA),
 		AssetIn: fillID(0x01), AssetInAddr: fillAcct(0x02), MarketID: fillID(0x4D), Recipient: fillAcct(0xBB),
 	}

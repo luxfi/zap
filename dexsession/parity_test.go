@@ -61,16 +61,15 @@ func TestParity_DeriveIntentID(t *testing.T) {
 	networkID := uint32(96369)
 	cChainID := ID{0xc0}
 	dChainID := ID{0xd0}
-	txID := ID{0x77}
-	callIndex := uint32(3)
 	account := Account{0xAB, 0xCD}
 	assetIn := ID{0x01}
 	amountIn := uint64(1_000_000)
 	marketID := ID{0x4d}
+	nonce := uint64(3)
 
-	got := DeriveIntentID(networkID, cChainID, dChainID, txID, callIndex, account, assetIn, amountIn, marketID)
+	got := DeriveIntentID(networkID, cChainID, dChainID, account, assetIn, amountIn, marketID, nonce)
 
-	// Recompute independently (the canonical algorithm).
+	// Recompute independently (the canonical algorithm — NO txID; nonce trails marketID).
 	h := sha256.New()
 	h.Write([]byte("lux.dex.native.intent.v1"))
 	var u4 [4]byte
@@ -78,15 +77,14 @@ func TestParity_DeriveIntentID(t *testing.T) {
 	h.Write(u4[:])
 	h.Write(cChainID[:])
 	h.Write(dChainID[:])
-	h.Write(txID[:])
-	binary.BigEndian.PutUint32(u4[:], callIndex)
-	h.Write(u4[:])
 	h.Write(account[:])
 	h.Write(assetIn[:])
 	var u8 [8]byte
 	binary.BigEndian.PutUint64(u8[:], amountIn)
 	h.Write(u8[:])
 	h.Write(marketID[:])
+	binary.BigEndian.PutUint64(u8[:], nonce)
+	h.Write(u8[:])
 	var want ID
 	copy(want[:], h.Sum(nil))
 
@@ -147,9 +145,18 @@ func TestParity_SettlementHookData(t *testing.T) {
 		t.Fatalf("settlement hookData len = %d, want %d", len(hook), 4+settlementBodyLen)
 	}
 
-	intent := EncodeIntentHookData()
+	// Phase A with deadline 0, nonce 0 is the bare DI01 tag (minimal-width).
+	intent := EncodeIntentHookData(0, 0)
 	if !bytes.Equal(intent, []byte{'D', 'I', '0', '1'}) {
-		t.Fatalf("intent hookData = %x, want DI01", intent)
+		t.Fatalf("intent hookData (0,0) = %x, want DI01", intent)
+	}
+	// With a nonce, the body carries deadline[32] | nonce[32] after the tag (the
+	// chain-observable disambiguator the on-chain decoder reads back identically).
+	withNonce := EncodeIntentHookData(0, 7)
+	wantWithNonce := append([]byte{'D', 'I', '0', '1'}, make([]byte, 64)...)
+	wantWithNonce[len(wantWithNonce)-1] = 7 // nonce in the low byte of the second word
+	if !bytes.Equal(withNonce, wantWithNonce) {
+		t.Fatalf("intent hookData (0,7) = %x, want %x", withNonce, wantWithNonce)
 	}
 }
 
@@ -183,11 +190,11 @@ func TestParity_SwapSelector(t *testing.T) {
 // fails with a clear diff — the strongest pin against silent format drift.
 func TestParity_VectorPin(t *testing.T) {
 	got := DeriveIntentID(
-		1, ID{}, ID{}, ID{}, 0,
-		Account{}, ID{}, 0, ID{},
+		1, ID{}, ID{},
+		Account{}, ID{}, 0, ID{}, 0,
 	)
-	// Frozen expected value: SHA-256 of domain || u32(1) || 32x0 || 32x0 || 32x0 ||
-	// u32(0) || 20x0 || 32x0 || u64(0) || 32x0. Computed once and pinned.
+	// Frozen expected value: SHA-256 of domain || u32(1) || 32x0 || 32x0 || 20x0 ||
+	// 32x0 || u64(0) || 32x0 || u64(0). Computed once and pinned.
 	want := frozenAllZeroIntentID()
 	if hex.EncodeToString(got[:]) != hex.EncodeToString(want[:]) {
 		t.Fatalf("frozen intent id vector drift:\n got %x\nwant %x", got[:], want[:])
@@ -204,15 +211,13 @@ func frozenAllZeroIntentID() ID {
 	binary.BigEndian.PutUint32(u4[:], 1)
 	h.Write(u4[:])
 	z32 := make([]byte, 32)
-	h.Write(z32) // cChainID
-	h.Write(z32) // dChainID
-	h.Write(z32) // txID
-	binary.BigEndian.PutUint32(u4[:], 0)
-	h.Write(u4[:])         // callIndex
+	h.Write(z32)              // cChainID
+	h.Write(z32)              // dChainID
 	h.Write(make([]byte, 20)) // account
-	h.Write(z32)           // assetIn
+	h.Write(z32)              // assetIn
 	h.Write(make([]byte, 8))  // amountIn
-	h.Write(z32)           // marketID
+	h.Write(z32)              // marketID
+	h.Write(make([]byte, 8))  // nonce
 	var out ID
 	copy(out[:], h.Sum(nil))
 	return out
