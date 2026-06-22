@@ -136,7 +136,7 @@ func (v *V4PrecompileSession) OpenSwap(req SwapIntentRequest) (*V4SwapSession, e
 	zfo := zeroForOneFor(req)
 	poolKeyHash := DerivePoolKeyHash(pk)
 	paramsHash := DeriveSwapParamsHash(zfo, req.AmountIn)
-	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, req.MarketID)
+	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, req.MarketID, req.Nonce)
 	scope := v.scopeFor(ActionSwap, req.Account, poolKeyHash, paramsHash, intentID)
 	cap, err := v.mint(AuthIntent|AuthWatch|AuthSettlement, scope)
 	if err != nil {
@@ -334,7 +334,7 @@ func (v *V4PrecompileSession) OpenRoute(req RouteRequest) (*V4RouteSession, erro
 	paramsHash := DeriveSwapParamsHash(true, req.AmountIn)
 	// The route's intent id binds the single C->D input by the FIRST market (the lock
 	// market), identically to a swap intent on that market.
-	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, first)
+	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, first, uint64(req.CallIndex))
 	scope := v.scopeFor(ActionRoute, req.Account, pathHash, paramsHash, intentID)
 	cap, err := v.mint(AuthIntent|AuthWatch|AuthSettlement, scope)
 	if err != nil {
@@ -577,7 +577,7 @@ func (v *V4PrecompileSession) OpenModifyLiquidity(req LiquidityRequest) (*V4Liqu
 	paramsHash := DeriveLiquidityParamsHash(req.TickLower, req.TickUpper, req.LiquidityDelta, req.Salt)
 	// The position-commit object binds by account+pool+params (no swap intent id); the
 	// intent id slot is the derivation over the funding identity for correlation.
-	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, req.MarketID)
+	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, req.MarketID, uint64(req.CallIndex))
 	scope := v.scopeFor(ActionModifyLiquidity, req.Account, poolKeyHash, paramsHash, intentID)
 	cap, err := v.mint(AuthIntent|AuthWatch, scope)
 	if err != nil {
@@ -617,7 +617,7 @@ func (s *V4LiquiditySession) WritePrepareCommit(ctx context.Context) *Promise[Pr
 			LiquidityDelta: s.req.LiquidityDelta, // positive: add/commit
 			Salt:           s.req.Salt,
 		}
-		hookData := EncodeIntentHookData() // commit is a Phase-A funding intent
+		hookData := EncodeIntentHookData(0, uint64(s.req.CallIndex)) // commit is a Phase-A funding intent
 		calldata := EncodeModifyLiquidityCalldata(s.pk, args, hookData)
 		p.fulfil(PreparedIntent{
 			To:       addr9999(),
@@ -702,7 +702,7 @@ func (v *V4PrecompileSession) openRemoval(req CollectRequest, kind V4Action) (*V
 	}
 	poolKeyHash := DerivePoolKeyHash(pk)
 	paramsHash := DeriveLiquidityParamsHash(req.TickLower, req.TickUpper, req.LiquidityDelta, req.Salt)
-	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetOut, 0, req.MarketID)
+	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetOut, 0, req.MarketID, uint64(req.CallIndex))
 	scope := v.scopeFor(kind, req.Account, poolKeyHash, paramsHash, intentID)
 	cap, err := v.mint(AuthIntent|AuthWatch|AuthSettlement, scope)
 	if err != nil {
@@ -741,7 +741,7 @@ func (s *V4CollectSession) WriteRequest(ctx context.Context) *Promise[PreparedIn
 			LiquidityDelta: s.req.LiquidityDelta, // negative: remove
 			Salt:           s.req.Salt,
 		}
-		hookData := EncodeIntentHookData()
+		hookData := EncodeIntentHookData(0, uint64(s.req.CallIndex))
 		calldata := EncodeModifyLiquidityCalldata(s.pk, args, hookData)
 		p.fulfil(PreparedIntent{
 			To:       addr9999(),

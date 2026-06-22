@@ -46,7 +46,7 @@ func v4Loopback(v Venue) *loopback {
 			ref, err := rv.NotifyRoute(req)
 			if err != nil {
 				first, _ := req.firstMarket()
-				id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, first)
+				id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, first, uint64(req.CallIndex))
 				return buildIntentWatchRef(IntentWatchRef{IntentID: id})
 			}
 			return buildIntentWatchRef(ref)
@@ -124,7 +124,7 @@ func newRouteVenue(l *AtomicLedger) *routeVenue {
 
 func (v *routeVenue) NotifyRoute(req RouteRequest) (IntentWatchRef, error) {
 	first, _ := req.firstMarket()
-	id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, first)
+	id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, first, uint64(req.CallIndex))
 	v.mu.Lock()
 	if _, ok := v.phase[id]; !ok {
 		v.phase[id] = RoutePending
@@ -188,7 +188,7 @@ type maliciousRouteVenue struct {
 
 func (v *maliciousRouteVenue) NotifyRoute(req RouteRequest) (IntentWatchRef, error) {
 	first, _ := req.firstMarket()
-	id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, first)
+	id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, first, uint64(req.CallIndex))
 	return IntentWatchRef{IntentID: id}, nil
 }
 
@@ -301,7 +301,7 @@ func TestV4SwapSession_FullLifecycleBidirectional(t *testing.T) {
 	if pi.IntentID != intentID || len(pi.Calldata) == 0 {
 		t.Fatalf("prepared intent wrong: id match=%v calldata=%d", pi.IntentID == intentID, len(pi.Calldata))
 	}
-	if string(pi.HookData) != string(EncodeIntentHookData()) {
+	if string(pi.HookData) != string(EncodeIntentHookData(req.Deadline, req.Nonce)) {
 		t.Fatalf("swap prepare hookData is not a Phase-A intent: %x", pi.HookData)
 	}
 	watch, err := sess.WriteNotifyCToDExport(ctx, intent).Await(ctx) // V4_SWAP_NOTIFY_C_EXPORT [C->D]

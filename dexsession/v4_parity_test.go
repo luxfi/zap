@@ -56,7 +56,7 @@ func TestParity_V4_ModifyLiquidityCalldata(t *testing.T) {
 	salt[31] = 0xCD
 
 	// A POSITIVE delta (commit/add).
-	add := EncodeModifyLiquidityCalldata(pk, ModifyLiquidityArgs{TickLower: -60, TickUpper: 60, LiquidityDelta: 1_000_000, Salt: salt}, EncodeIntentHookData())
+	add := EncodeModifyLiquidityCalldata(pk, ModifyLiquidityArgs{TickLower: -60, TickUpper: 60, LiquidityDelta: 1_000_000, Salt: salt}, EncodeIntentHookData(0, 0))
 	if got := binary.BigEndian.Uint32(add[:4]); got != SelectorModifyLiquidity {
 		t.Fatalf("selector = %08X, want %08X", got, SelectorModifyLiquidity)
 	}
@@ -98,7 +98,7 @@ func TestParity_V4_ModifyLiquidityCalldata(t *testing.T) {
 	}
 
 	// A NEGATIVE delta (remove/collect/cancel): two's-complement sign-extended.
-	rem := EncodeModifyLiquidityCalldata(pk, ModifyLiquidityArgs{TickLower: -60, TickUpper: 60, LiquidityDelta: -1_000_000, Salt: salt}, EncodeIntentHookData())
+	rem := EncodeModifyLiquidityCalldata(pk, ModifyLiquidityArgs{TickLower: -60, TickUpper: 60, LiquidityDelta: -1_000_000, Salt: salt}, EncodeIntentHookData(0, 0))
 	rdw := word(rem, 7)
 	// High 24 bytes must be 0xff (sign extension of a negative int256).
 	for i := 0; i < 24; i++ {
@@ -162,7 +162,7 @@ func TestParity_V4_RouteIntentHookData(t *testing.T) {
 		t.Fatalf("route decoder accepted a mismatched hop count")
 	}
 	// A non-route intent (plain DI01) is NOT a route body.
-	if _, ok := DecodeRouteIntentHookData(EncodeIntentHookData()); ok {
+	if _, ok := DecodeRouteIntentHookData(EncodeIntentHookData(0, 0)); ok {
 		t.Fatalf("plain DI01 decoded as a route")
 	}
 }
@@ -192,7 +192,7 @@ func TestParity_V4_SessionIDDomainSeparation(t *testing.T) {
 	scope := V4ActionScope{NetworkID: 1, Kind: ActionSwap}
 	sid := DeriveSessionID(scope)
 	// An intent id over all-zero inputs (different domain) must differ.
-	iid := DeriveIntentID(1, ID{}, ID{}, ID{}, 0, Account{}, ID{}, 0, ID{})
+	iid := DeriveIntentID(1, ID{}, ID{}, Account{}, ID{}, 0, ID{}, 0)
 	if sid == iid {
 		t.Fatalf("session id collided with intent id — domains not separated")
 	}

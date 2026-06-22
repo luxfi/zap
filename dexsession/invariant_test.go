@@ -33,7 +33,7 @@ func testReq() SwapIntentRequest {
 		MinAmountOut: 990_000,
 		Recipient:    Account{0xAA, 0xBB, 0xCC},
 		Deadline:     1 << 40,
-		CallIndex:    0,
+		Nonce:        0,
 	}
 }
 
@@ -89,12 +89,14 @@ func TestZAP_PrepareIntent_ReturnsCalldataNotFunds(t *testing.T) {
 	if len(pi.HookData) == 0 {
 		t.Fatalf("prepare returned empty hookData")
 	}
-	// hookData is Phase A (intent) — NOT a settlement that could credit.
-	if string(pi.HookData) != string(EncodeIntentHookData()) {
+	// hookData is Phase A (intent) — NOT a settlement that could credit — carrying the
+	// request's deadline + nonce (the chain-observable id binding).
+	if string(pi.HookData) != string(EncodeIntentHookData(req.Deadline, req.Nonce)) {
 		t.Fatalf("prepare hookData is not the intent phase: %x", pi.HookData)
 	}
-	// The intent id is the deterministic derivation (the user's tx will mint it).
-	wantID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, req.MarketID)
+	// The intent id is the deterministic derivation (the user's tx will mint it) — now
+	// chain-observable (no txID; nonce-bound), so off-chain == on-chain.
+	wantID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, req.MarketID, req.Nonce)
 	if pi.IntentID != wantID {
 		t.Fatalf("prepare intent id mismatch")
 	}
@@ -336,7 +338,7 @@ func TestZAP_PromisePipeline_QuoteIntentNotifyWatchSettle(t *testing.T) {
 	exportTx := ID{0xEE, 0x01}
 	key := DeriveUTXOID(exportTx, 0)
 	ledger.PutExport(key, atomicObject{owner: req.Recipient, asset: req.AssetIn, amount: 1_000_000})
-	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, req.MarketID)
+	intentID := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, req.MarketID, req.Nonce)
 	hv.commit(intentID, DExportRef{SourceChainID: req.DChainID, SourceTxID: exportTx, OutputIndex: 0, IntentID: intentID}, req.AssetIn)
 
 	// THE PIPELINE — declarative, dependent calls overlap:
@@ -399,7 +401,7 @@ func TestZAP_StaleResponse_BadQuoteMissesMinOutOrReverts(t *testing.T) {
 	// MinAmountOut would be rejected at match (D enforces minOut); here we assert the
 	// prepared calldata is a Phase-A intent (no premature credit), and that the lie
 	// did not change the user's MinAmountOut.
-	if string(pi.HookData) != string(EncodeIntentHookData()) {
+	if string(pi.HookData) != string(EncodeIntentHookData(req.Deadline, req.Nonce)) {
 		t.Fatalf("stale quote produced a settlement, not an intent")
 	}
 	// Model: D matched only 980_000 (below the 990_000 floor) -> a correct D would
