@@ -92,7 +92,12 @@ const (
 	piSize      = 252
 )
 
-func buildPreparedIntent(p PreparedIntent) (*zaplib.Message, error) {
+// buildPreparedIntent serializes a PreparedIntent and finalizes it under the
+// given msgType. The same payload is sent for MsgPrepare (the prepare call) and
+// MsgNotify (NotifyIntent), so the caller picks the route here rather than
+// re-tagging finished bytes — the flags word is set once, the idiomatic way,
+// via the Builder. The ZAP dispatcher routes on Flags()>>8.
+func buildPreparedIntent(p PreparedIntent, msgType uint16) (*zaplib.Message, error) {
 	b := zaplib.NewBuilder(piSize + len(p.Calldata) + len(p.HookData) + 256)
 	ob := b.StartObject(piSize)
 	ob.SetBytesFixed(piTo, p.To[:])
@@ -108,7 +113,7 @@ func buildPreparedIntent(p PreparedIntent) (*zaplib.Message, error) {
 	ob.SetBytes(piCalldata, p.Calldata)
 	ob.SetBytes(piHookData, p.HookData)
 	ob.FinishAsRoot()
-	return zaplib.Parse(b.FinishWithFlags(MsgPrepare << 8))
+	return zaplib.Parse(b.FinishWithFlags(msgType << 8))
 }
 
 func readPreparedIntent(m *zaplib.Message) PreparedIntent {
