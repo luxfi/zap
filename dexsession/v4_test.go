@@ -397,19 +397,30 @@ func TestV4RouteSession_MultiHopStaysOnDUntilFinalExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("route prepare: %v", err)
 	}
-	// The ONE calldata carries the WHOLE path (A->B->C) — no per-hop calldata exists.
-	gotPath, ok := DecodeRouteIntentHookData(pi.HookData)
-	if !ok || len(gotPath) != 3 {
-		t.Fatalf("route hookData does not carry the 3-hop path: ok=%v len=%d", ok, len(gotPath))
-	}
-	for i := range gotPath {
-		if gotPath[i] != req.Path[i] {
-			t.Fatalf("route path hop %d mismatch: got %x want %x", i, gotPath[i][:2], req.Path[i][:2])
-		}
-	}
-	// It is a single C->D INPUT intent (Phase A — DI01 leads the hookData).
+	// The ONE on-chain calldata is a PLAIN DI01 intent on the entry market — the body the
+	// precompile ACCEPTS. The path is NOT in the signed hookData (an RT01 body would revert
+	// on-chain: decodeIntentBody rejects any width outside {0,32,64}); it travels to the D
+	// router over the ZAP control plane. It is a single C->D INPUT intent (Phase A — DI01
+	// leads the hookData), and the body is a width the precompile's decodeIntentBody accepts.
 	if string(pi.HookData[0:4]) != string(intentPhaseTag[:]) {
 		t.Fatalf("route intent is not a Phase-A intent")
+	}
+	switch len(pi.HookData) {
+	case 4, 4 + 32, 4 + 64: // DI01 | DI01+deadline | DI01+deadline+nonce — all precompile-accepted
+	default:
+		t.Fatalf("route on-chain intent body width %d is not a precompile-accepted DI01 body "+
+			"(would revert on-chain)", len(pi.HookData))
+	}
+	// The PATH is still fully available — carried by the route session (control plane), the
+	// same path the venue learns via buildRouteRequest/NotifyRoute.
+	if got := sess.Path(); len(got) != 3 {
+		t.Fatalf("route session must carry the 3-hop path on the control plane, got len=%d", len(got))
+	} else {
+		for i := range got {
+			if got[i] != req.Path[i] {
+				t.Fatalf("route path hop %d mismatch: got %x want %x", i, got[i][:2], req.Path[i][:2])
+			}
+		}
 	}
 
 	watch, err := sess.WriteNotifyCToDExport(ctx, intent).Await(ctx) // V4_ROUTE_NOTIFY_C_EXPORT [C->D]

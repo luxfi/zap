@@ -360,9 +360,16 @@ func (s *V4RouteSession) IntentID() ID  { return s.intentID }
 func (s *V4RouteSession) Path() []ID    { return s.req.Path }
 
 // WritePrepareIntent [C->D, V4_ROUTE_PREPARE_INTENT] builds the ONE route-intent
-// calldata: a 0x9999 swap (DI01 intent) on the ENTRY market whose hookData carries the
-// whole path. This is the single C->D input the user signs; there is no per-hop
-// calldata. The route's atomicity starts here: one calldata, one intent id, one input.
+// calldata: a 0x9999 swap (DI01 intent) on the ENTRY market. This is the single C->D
+// input the user signs; there is no per-hop calldata. The route's atomicity starts here:
+// one calldata, one intent id, one input. The PATH is NOT carried in the signed on-chain
+// hookData — it travels to the D router over the ZAP control plane (buildRouteRequest /
+// NotifyRoute, MsgRoutePrepare) — because the on-chain precompile classifies the intent
+// purely by its entry market + nonce (DeriveIntentID does NOT hash the path) and only
+// supports the DI01 deadline/nonce body; an RT01 path body in the signed calldata would
+// REVERT on-chain (the precompile has no route-marker awareness). Keeping the path on the
+// control plane is also the right seam: the path is D-matcher orchestration that moves no
+// C-side value (one input object, one final output object regardless of hop count).
 func (s *V4RouteSession) WritePrepareIntent(ctx context.Context) *Promise[PreparedIntent] {
 	p := newPromise[PreparedIntent]()
 	if err := s.cap.authorizeSelf(AuthIntent); err != nil {
@@ -377,22 +384,32 @@ func (s *V4RouteSession) WritePrepareIntent(ctx context.Context) *Promise[Prepar
 
 // prepareRouteLocal builds the single route-intent PreparedIntent CLIENT-SIDE (so a
 // malicious server cannot inject a forged path or recipient the user would sign). The
-// calldata is a swap on the entry market with a route-path hookData; the path is the
-// user's own. It reserves nothing and returns no enforceable amount.
+// calldata is a PLAIN DI01 intent (deadline + nonce) on the entry market — the exact body
+// the on-chain precompile accepts. It reserves nothing and returns no enforceable amount.
+//
+// WHY NOT embed the path on-chain (the RT01 fix): the on-chain DeriveIntentID binds the
+// entry market + nonce, NOT the path, so a plain DI01 intent on the entry market produces
+// the IDENTICAL id this session computed (OpenRoute derived it with `entry` + CallIndex).
+// The precompile has no RT01 route-marker awareness; an RT01 body in the signed calldata is
+// width 8+n*32, which decodeIntentBody rejects -> the swap REVERTS on-chain. The path is
+// instead carried to the D router over the ZAP control plane (buildRouteRequest /
+// NotifyRoute), where it belongs — it is D-matcher orchestration, not C-side value. The
+// nonce is CallIndex (matching OpenRoute's id derivation) so the off-chain and on-chain ids
+// agree and the watch correlates.
 func (s *V4RouteSession) prepareRouteLocal() (PreparedIntent, error) {
 	if s.req.AmountIn == 0 {
 		return PreparedIntent{}, fmt.Errorf("dexsession: openRoute: zero amountIn")
+	}
+	if len(s.req.Path) == 0 {
+		return PreparedIntent{}, fmt.Errorf("dexsession: openRoute: empty path")
 	}
 	pk, ok := s.dex.market(s.entry)
 	if !ok {
 		return PreparedIntent{}, fmt.Errorf("dexsession: openRoute: unknown entry market %x", s.entry[:8])
 	}
-	hookData := EncodeRouteIntentHookData(s.req.Path)
-	// Verify the path we encoded round-trips (defence against a corrupted build before
-	// handing the user bytes to sign).
-	if got, ok := DecodeRouteIntentHookData(hookData); !ok || len(got) != len(s.req.Path) {
-		return PreparedIntent{}, fmt.Errorf("dexsession: openRoute: route hookData build failed")
-	}
+	// Plain DI01 intent on the entry market; nonce == CallIndex to match the id this session
+	// derived (and the id the on-chain SubmitSwapIntent will re-derive from this calldata).
+	hookData := EncodeIntentHookData(s.req.Deadline, uint64(s.req.CallIndex))
 	calldata := EncodeSwapCalldata(pk, true /*entry direction; D re-validates*/, s.req.AmountIn, hookData)
 	return PreparedIntent{
 		To:        addr9999(),
