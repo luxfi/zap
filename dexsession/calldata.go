@@ -46,11 +46,34 @@ var (
 // IDENTICAL to precompile/dex/settle_hookdata.go settlementBodyLen.
 const settlementBodyLen = 32 + 32
 
-// EncodeIntentHookData builds an explicit Phase-A hookData (the tag alone).
-// Byte-identical to precompile/dex EncodeIntentHookData.
-func EncodeIntentHookData() []byte {
-	out := make([]byte, 4)
-	copy(out, intentPhaseTag[:])
+// EncodeIntentHookData builds an explicit Phase-A hookData carrying the deadline and the
+// intent NONCE. BYTE-IDENTICAL to precompile/dex EncodeIntentHookData — both sides MUST
+// produce the same calldata for the same (deadline, nonce) or the off-chain-derived
+// intent id would diverge from the on-chain one (the watch-correlation contract). The
+// encoding is MINIMAL-WIDTH (the precompile decodes all three widths):
+//   - deadline==0 && nonce==0 -> tag only (4 bytes)
+//   - nonce==0                -> tag | deadline[32]
+//   - else                    -> tag | deadline[32] | nonce[32]
+func EncodeIntentHookData(deadline, nonce uint64) []byte {
+	if deadline == 0 && nonce == 0 {
+		out := make([]byte, 4)
+		copy(out, intentPhaseTag[:])
+		return out
+	}
+	var d [32]byte
+	binary.BigEndian.PutUint64(d[24:32], deadline)
+	if nonce == 0 {
+		out := make([]byte, 0, 4+32)
+		out = append(out, intentPhaseTag[:]...)
+		out = append(out, d[:]...)
+		return out
+	}
+	var n [32]byte
+	binary.BigEndian.PutUint64(n[24:32], nonce)
+	out := make([]byte, 0, 4+64)
+	out = append(out, intentPhaseTag[:]...)
+	out = append(out, d[:]...)
+	out = append(out, n[:]...)
 	return out
 }
 

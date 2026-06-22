@@ -175,7 +175,7 @@ func (fsn *FullServiceNode) registerHandlers() {
 				// On failure, return the deterministic intent id so the watch can report
 				// the rejection — never an error mistaken for a value claim.
 				first, _ := req.firstMarket()
-				id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, ID{}, req.CallIndex, req.Account, req.AssetIn, req.AmountIn, first)
+				id := DeriveIntentID(req.NetworkID, req.CChainID, req.DChainID, req.Account, req.AssetIn, req.AmountIn, first, uint64(req.CallIndex))
 				return buildIntentWatchRef(IntentWatchRef{IntentID: id})
 			}
 			return buildIntentWatchRef(ref)
