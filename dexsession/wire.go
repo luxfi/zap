@@ -107,9 +107,22 @@ const nativeIntentDomain = "lux.dex.native.intent.v1"
 // Every component is fixed width and length-stable. There is NO txID: the id is
 // CHAIN-OBSERVABLE — dexsession derives the SAME id the on-chain SubmitSwapIntent mints,
 // from values known BEFORE the user signs (the nonce carried in the swap's DI01
-// hookData), so the watch correlates against the live chain. (Previously dexsession
+// hookData), so the watch can PRE-REGISTER against the live chain. (Previously dexsession
 // substituted a zero txID while the chain used the real one, so the ids never matched.)
 // It is a NAME, never an authority.
+//
+// FEE-ON-TRANSFER CAVEAT (the amountIn axis). On-chain, SubmitSwapIntent derives the id over
+// the OBSERVED-DELTA `locked` amount (what the 0x9999 vault actually received), NOT the
+// requested amount — because for an ERC-20 the object must be backed by the value really
+// locked. For native LUX and standard (non-fee-on-transfer) ERC-20s, locked == amountIn, so
+// this off-chain pre-derivation EQUALS the on-chain id exactly and the pre-registered watch
+// fires. For a FEE-ON-TRANSFER token, locked < amountIn, so this pre-derived id DIVERGES from
+// the on-chain id. That is a missed pre-registration optimization, NOT a broken correlation
+// or a safety issue: the on-chain IntentSubmitted event carries the REAL id as its INDEXED
+// topic (and the real `locked` amount), so a keeper correlates by watching that event topic —
+// the AUTHORITATIVE binding — and builds the D order from the event, never from a guessed id.
+// The pre-derived id here is therefore valid for pre-registration exactly when locked ==
+// amountIn; for fee-on-transfer inputs, correlate via the IntentSubmitted indexed topic.
 func DeriveIntentID(
 	networkID uint32,
 	cChainID, dChainID ID,
