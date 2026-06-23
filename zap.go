@@ -153,7 +153,7 @@ func (m *Message) Version() uint16 {
 // ParseHeader validates a ZAP wire frame and returns the (validated
 // data slice, root offset) WITHOUT allocating a [*Message]. Same checks
 // as [Parse] — magic, version, size — but the result is two values, not
-// a pointer. Intended for generic wrappers (zapv2) that build their own
+// a pointer. Intended for generic wrappers (zapv1) that build their own
 // value-typed accessors and never need a *Message.
 //
 // Returns (data[:size], rootOff, nil) on success.
@@ -162,7 +162,7 @@ func (m *Message) Version() uint16 {
 // size + bounds). The implementation is intentionally written as one
 // linear sequence (no intermediate function calls) so the inliner
 // folds the whole body into the caller. Combined with the value-
-// typed [zapv2.View], this is what makes the v2 read path match v1's
+// typed [zapv1.View], this is what makes the v2 read path match v1's
 // 2 ns hand-rolled per-Read cost — zero function calls, zero heap.
 func ParseHeader(data []byte) ([]byte, int, error) {
 	return parseHeaderImpl(data)
@@ -206,7 +206,7 @@ func WrapBuffer(data []byte) *Message {
 }
 
 // RootObjectAt returns a [zap.Object] anchored at absolute offset
-// `off` within this message. Used by zapv2.Build to avoid a redundant
+// `off` within this message. Used by zapv1.Build to avoid a redundant
 // header-read after [Builder.FinishAsRoot] already returned the root
 // position.
 func (m *Message) RootObjectAt(off int) Object {
@@ -281,7 +281,7 @@ func (o Object) IsNull() bool {
 }
 
 // Offset returns the object's absolute byte offset within its
-// underlying message. Exposed so external generic wrappers (zapv2)
+// underlying message. Exposed so external generic wrappers (zapv1)
 // can construct typed sub-views into the same buffer without
 // re-walking the parent pointers.
 //
@@ -294,7 +294,7 @@ func (o Object) Offset() int {
 }
 
 // Message returns the underlying [*Message] this Object is a view
-// into. Used by zapv2 to alias the message's bytes for direct
+// into. Used by zapv1 to alias the message's bytes for direct
 // payload indexing.
 func (o Object) Message() *Message {
 	return o.msg

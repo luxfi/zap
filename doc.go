@@ -7,7 +7,7 @@
 // which emits v1-equivalent fast paths from a declarative .zap source.
 //
 // Consumer dispatch for ad-hoc / dynamic schemas goes through the v2
-// generic API (github.com/luxfi/zap/v2).
+// generic API (github.com/luxfi/zap/v1).
 //
 // The v1 hand-rolled code in this package remains for in-flight
 // migration of legacy callers (luxfi/node/vms/platformvm/txs/zap_native,
