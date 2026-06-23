@@ -49,6 +49,9 @@ func fieldByteSize(f Field) (int, bool) {
 	if n, ok := f.IsBytes(); ok {
 		return n, true
 	}
+	if f.IsVariable() {
+		return 8, true // tail pointer {relOffset uint32, length uint32}
+	}
 	if sz, ok := typeToSize[f.Type]; ok {
 		return sz, true
 	}
@@ -154,11 +157,15 @@ func (%s) Name() string         { return %q }
 	// Byte-array fields are handled by standalone accessor functions
 	// (emitted after the constructor) because [N]byte is not a
 	// FieldKind union member.
+	// Scalar fields go in the Fields struct (zapv2.Field handles).
+	// Fixed byte-arrays and variable-length tails (string/bytes) get
+	// standalone typed accessors instead — neither [N]byte nor string/
+	// []byte is a zapv2.FieldKind member.
 	var scalarFields []Field
-	var byteFields []Field
+	var accessorFields []Field
 	for _, f := range s.Fields {
-		if _, isBytes := f.IsBytes(); isBytes {
-			byteFields = append(byteFields, f)
+		if _, isBytes := f.IsBytes(); isBytes || f.IsVariable() {
+			accessorFields = append(accessorFields, f)
 		} else {
 			scalarFields = append(scalarFields, f)
 		}
@@ -188,9 +195,9 @@ func (%s) Name() string         { return %q }
 	}
 
 	// New constructor.
-	emitNewConstructor(w, s, scalarFields, byteFields)
+	emitNewConstructor(w, s, scalarFields, accessorFields)
 	emitWrapFunction(w, s)
-	emitByteFieldAccessors(w, s, byteFields)
+	emitAccessorFields(w, s, accessorFields)
 	emitRegisterInit(w, s)
 
 	return nil
@@ -200,37 +207,67 @@ func (%s) Name() string         { return %q }
 // ZAP buffer with all fields set from parameters. The body uses v1
 // primitives (zap.NewBuilder, b.StartObject, ob.Set*, b.Finish) so
 // every step inlines into the caller.
-func emitNewConstructor(w io.Writer, s Schema, scalar, bytes []Field) {
-	// Function signature — scalar fields first, then byte-array fields.
+func emitNewConstructor(w io.Writer, s Schema, scalar, accessor []Field) {
+	// Function signature — scalar fields first, then accessor fields
+	// (fixed byte arrays as [N]byte, variable string as string, variable
+	// bytes as []byte) in declared order.
 	var args []string
 	for _, f := range scalar {
 		args = append(args, fmt.Sprintf("%s %s", lowerFirst(f.Name), f.Type))
 	}
-	for _, f := range bytes {
-		n, _ := f.IsBytes()
-		args = append(args, fmt.Sprintf("%s [%d]byte", lowerFirst(f.Name), n))
+	for _, f := range accessor {
+		switch {
+		case f.IsVarString():
+			args = append(args, fmt.Sprintf("%s string", lowerFirst(f.Name)))
+		case f.IsVarBytes():
+			args = append(args, fmt.Sprintf("%s []byte", lowerFirst(f.Name)))
+		default:
+			n, _ := f.IsBytes()
+			args = append(args, fmt.Sprintf("%s [%d]byte", lowerFirst(f.Name), n))
+		}
 	}
+
+	// Buffer capacity: fixed payload plus the byte length of every
+	// variable-length tail value, so the common case is a single alloc.
+	// (The Builder still grows if the estimate is short.)
+	capExpr := fmt.Sprintf("zap.HeaderSize + Size%s", s.WireName)
+	for _, f := range accessor {
+		if f.IsVariable() {
+			capExpr += fmt.Sprintf(" + len(%s)", lowerFirst(f.Name))
+		}
+	}
+
 	fmt.Fprintf(w, `// New%s builds a fresh %s in a ZAP buffer.
 //
 // Hand-rolled fast path: inlines v1 primitives ([zap.NewBuilder],
 // [*Builder.StartObject], [*ObjectBuilder.Set*], [*Builder.Finish])
-// so the entire build expands at the call site. Result: 1 heap
-// alloc (the buffer), zero overhead vs v1.
+// so the entire build expands at the call site. Scalars and fixed byte
+// arrays live in the fixed payload; variable-length string/bytes go in
+// the object tail (the fixed payload holds their 8-byte pointers).
 func New%s(%s) (zapv2.View[%s], []byte) {
-	b := zap.NewBuilder(zap.HeaderSize + Size%s)
+	b := zap.NewBuilder(%s)
 	ob := b.StartObject(Size%s)
 	ob.SetUint8(0, uint8(Kind%s))
 `, s.WireName, s.WireName, s.WireName, strings.Join(args, ", "), s.GoName,
-		s.WireName, s.WireName, s.WireName)
+		capExpr, s.WireName, s.WireName)
 
 	for _, f := range scalar {
 		fmt.Fprintf(w, "\tob.%s(Offset%s_%s, %s)\n",
 			typeToSetMethod[f.Type], s.WireName, f.Name, lowerFirst(f.Name))
 	}
-	for _, f := range bytes {
-		// Pass the array as a slice via [:] so SetBytesFixed gets a []byte.
-		fmt.Fprintf(w, "\tob.SetBytesFixed(Offset%s_%s, %s[:])\n",
-			s.WireName, f.Name, lowerFirst(f.Name))
+	for _, f := range accessor {
+		switch {
+		case f.IsVarString():
+			fmt.Fprintf(w, "\tob.SetText(Offset%s_%s, %s)\n",
+				s.WireName, f.Name, lowerFirst(f.Name))
+		case f.IsVarBytes():
+			fmt.Fprintf(w, "\tob.SetBytes(Offset%s_%s, %s)\n",
+				s.WireName, f.Name, lowerFirst(f.Name))
+		default:
+			// Fixed array passed as a slice via [:] so SetBytesFixed gets []byte.
+			fmt.Fprintf(w, "\tob.SetBytesFixed(Offset%s_%s, %s[:])\n",
+				s.WireName, f.Name, lowerFirst(f.Name))
+		}
 	}
 
 	fmt.Fprintf(w, `	rootOff := ob.FinishAsRoot()
@@ -287,13 +324,43 @@ func Wrap%s(b []byte) (zapv2.View[%s], error) {
 // copy into the returned value (necessary because the slice is alive
 // only as long as the View's underlying buffer is, and the typed
 // accessor must hand the caller an owned value).
-func emitByteFieldAccessors(w io.Writer, s Schema, fields []Field) {
+func emitAccessorFields(w io.Writer, s Schema, fields []Field) {
 	if len(fields) == 0 {
 		return
 	}
 	for _, f := range fields {
-		n, _ := f.IsBytes()
-		fmt.Fprintf(w, `// %s%s reads the %d-byte inline %s field of %s.
+		switch {
+		case f.IsVarString():
+			fmt.Fprintf(w, `// %s%s reads the variable-length %s string field of %s.
+//
+// Zero-copy: v1's Object.Text returns a string over a sub-slice of the
+// underlying buffer. Valid only while the View's buffer is alive.
+func %s%s(v zapv2.View[%s]) string {
+	msg := zap.WrapBuffer(v.Bytes())
+	obj := msg.RootObjectAt(int(zapv2.RootOff(v)))
+	return obj.Text(Offset%s_%s)
+}
+
+`, s.WireName, f.Name, f.Name, s.WireName,
+				s.WireName, f.Name, s.GoName,
+				s.WireName, f.Name)
+		case f.IsVarBytes():
+			fmt.Fprintf(w, `// %s%s reads the variable-length %s bytes field of %s.
+//
+// Zero-copy: v1's Object.Bytes returns a sub-slice of the underlying
+// buffer. Valid only while the View's buffer is alive; copy to retain.
+func %s%s(v zapv2.View[%s]) []byte {
+	msg := zap.WrapBuffer(v.Bytes())
+	obj := msg.RootObjectAt(int(zapv2.RootOff(v)))
+	return obj.Bytes(Offset%s_%s)
+}
+
+`, s.WireName, f.Name, f.Name, s.WireName,
+				s.WireName, f.Name, s.GoName,
+				s.WireName, f.Name)
+		default:
+			n, _ := f.IsBytes()
+			fmt.Fprintf(w, `// %s%s reads the %d-byte inline %s field of %s.
 //
 // Zero-copy on the read side (v1's Object.BytesFixedSlice returns
 // a sub-slice of the underlying buffer); the returned [%d]byte is a
@@ -311,11 +378,12 @@ func %s%s(v zapv2.View[%s]) [%d]byte {
 }
 
 `, s.WireName, f.Name, n, f.Name, s.WireName,
-			n,
-			s.WireName, f.Name, s.GoName, n,
-			s.WireName, f.Name, n,
-			n,
-			n)
+				n,
+				s.WireName, f.Name, s.GoName, n,
+				s.WireName, f.Name, n,
+				n,
+				n)
+		}
 	}
 }
 
