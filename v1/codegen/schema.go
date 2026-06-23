@@ -103,6 +103,12 @@ type Field struct {
 	// field occupies an 8-byte list pointer {relOffset, length} at Offset;
 	// the elements live in the object tail and are read via [zapv1.ListAt].
 	Elem *ListElem
+	// Nested, when non-nil, marks this field as a SINGULAR nested object
+	// (Type is ignored). The field occupies a 4-byte object pointer
+	// {relOffset} at Offset; the nested object lives in the object tail and
+	// is read via [zapv1.NestedAt]. The proto3 "message field" case — the
+	// singular peer of Elem. An unset value (nil) encodes as a null pointer.
+	Nested *NestedMsg
 }
 
 // ListElem describes the element type of a list field. The element must
@@ -113,15 +119,41 @@ type ListElem struct {
 	// Schema is the element schema's marker GoName, e.g. "ItemSchema".
 	// Emitted as the List[E] / WriteList[S,E] / ListAt[S,E] type param.
 	Schema string
+	// Wire is the element schema's WireName, e.g. "BatchItem". Needed to
+	// reference the element's variable-length Offset<Wire>_<Field>
+	// constants when an element carries string/bytes sub-fields. May be
+	// empty for scalar-only elements (which use only <Schema>Fields).
+	Wire string
 	// Value is the Go value-struct the constructor accepts per element,
 	// e.g. "Item". Emitted as `type Value struct { ...Fields... }` and the
 	// list parameter is `[]Value`.
 	Value string
 	// Stride is the element's fixed payload size in bytes (its Size()).
 	Stride int
-	// Fields are the element's scalar fields, in order. Used to emit the
-	// Value struct and the per-element WriteList body (one zapv1.Write per
-	// field, from the value struct into the element Setter).
+	// Fields are the element's fields, in order (scalar, string, bytes).
+	// Used to emit the Value struct and the per-element WriteList body
+	// (one write per field, from the value struct into the element Setter).
+	Fields []Field
+}
+
+// NestedMsg describes a singular nested-object field — the proto3 message
+// field. The nested object must be a FIXED-SIZE (flat, no-kind) Element
+// schema, reached through a 4-byte object pointer; its flat payload lives
+// in the parent's object tail. The singular peer of [ListElem].
+type NestedMsg struct {
+	// Schema is the nested schema's marker GoName, e.g. "InnerSchema".
+	// Emitted as the View[N] / WriteNested[S,N] / NestedAt[S,N] type param.
+	Schema string
+	// Wire is the nested schema's WireName, e.g. "Inner". Referenced for
+	// the nested's Offset<Wire>_<Field> constants when it carries
+	// string/bytes sub-fields.
+	Wire string
+	// Value is the Go value-struct the constructor accepts (by POINTER, so
+	// nil encodes the unset/null case), e.g. "Inner". Emitted as
+	// `type Value struct { ...Fields... }`; the parameter is `*Value`.
+	Value string
+	// Fields are the nested object's fields, in order. Used to emit the
+	// Value struct and the WriteNested body (one write per field).
 	Fields []Field
 }
 
@@ -130,6 +162,15 @@ type ListElem struct {
 func (f Field) IsList() (*ListElem, bool) {
 	if f.Elem != nil {
 		return f.Elem, true
+	}
+	return nil, false
+}
+
+// IsNested reports whether the field is a singular nested object,
+// returning the nested-message descriptor.
+func (f Field) IsNested() (*NestedMsg, bool) {
+	if f.Nested != nil {
+		return f.Nested, true
 	}
 	return nil, false
 }
