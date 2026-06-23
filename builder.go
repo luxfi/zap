@@ -282,7 +282,7 @@ func (ob *ObjectBuilder) ensureField(endOffset int) {
 // backwards).
 //
 // This is the exported counterpart to the internal ensureField helper.
-// It is used by zapv2.WriteList to keep the parent's payload reserved
+// It is used by zapv1.WriteList to keep the parent's payload reserved
 // before list elements are appended.
 func (ob *ObjectBuilder) ReserveFixed(dataSize int) {
 	ob.ensureField(dataSize)

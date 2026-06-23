@@ -1,0 +1,133 @@
+// Copyright (C) 2026, Lux Industries Inc. All rights reserved.
+// See the file LICENSE for licensing terms.
+
+package codegen
+
+// Schema is the declarative description of a ZAP v2 schema. The
+// codegen tool consumes a [Schema] and emits a per-schema *.go file
+// with the Wrap/Build/Read/Write functions hand-rolled to inline.
+//
+// One schema description, one emitted file, one and only one way to
+// access the wire format from Go code — Hickey-style.
+type Schema struct {
+	// GoName is the Go type name for the schema marker struct (e.g.
+	// "AdvanceTimeSchema"). Used as the View[S] type parameter.
+	GoName string
+	// WireName is the human-readable name of the schema (e.g.
+	// "AdvanceTimeTx"). Used in error messages and Registry lookup.
+	// Stable across versions — part of the schema's identity.
+	WireName string
+	// Kind is the discriminator byte at object offset 0.
+	Kind uint8
+	// Size is the fixed object payload in bytes (excluding header).
+	Size int
+	// Package is the Go package the emitted file should live in.
+	Package string
+	// Fields is the ordered list of fields: scalars, fixed byte arrays
+	// ("bytes<N>"), and variable-length tails ("string"/"bytes"). Each
+	// occupies a slot in the fixed payload (variable-length fields hold
+	// an 8-byte tail pointer there). List and nested-object tails are
+	// not declared here; they use the generic [zapv1.ListAt] machinery.
+	Fields []Field
+	// SkipRegistry suppresses the emit of `init() { zapv1.Register[S]
+	// (zapv1.DefaultRegistry) }`. Use for schema families that have a
+	// PRIVATE Kind namespace (the discriminator byte is unique only
+	// within a per-package registry, not globally). Examples:
+	//
+	//  - LP-186 chains-VM wire: each <vm>wire package has its own
+	//    KindBlock=0x01 / KindTx=0x02 / etc. Registering all twelve
+	//    KindBlock=0x01 implementations into a single global registry
+	//    would panic on duplicate kind byte at init time.
+	//  - LP-182 consensus wire: the 0x01..0x0D kind bytes are local to
+	//    the consensus-wire registry (`pkg/wire/zap/schemas.go`), not
+	//    the global zapv1.DefaultRegistry shared with P2P/light-client
+	//    schemas at 0xD0+/0xF0+.
+	//
+	// Default is false — schemas with globally-unique Kind bytes
+	// (LP-201, LP-208, LP-211, LP-214, LP-218) DO register at init.
+	SkipRegistry bool
+}
+
+// Field describes one fixed-size field in a schema.
+//
+// Two field kinds are supported:
+//
+//  1. Scalar fields. Type is one of the [zapv1.FieldKind] members
+//     (bool, int8/16/32/64, uint8/16/32/64, float32/64). The emitted
+//     code uses a [zapv1.Field][S, T] handle and the standard
+//     zapv1.Read/Write generic functions.
+//
+//  2. Fixed-width byte-array fields. Type is "bytes<N>" where N is a
+//     positive integer (e.g., "bytes20" for NodeID, "bytes32" for
+//     hashes, "bytes16" for session IDs). The emitted code uses the
+//     v1 ObjectBuilder.SetBytesFixed / Object.BytesFixedSlice
+//     accessors and returns the value as a [N]byte. Byte-array fields
+//     do NOT use the zapv1.Field generic handle because [N]byte is
+//     not a [zapv1.FieldKind] member; instead they get a typed
+//     accessor function emitted alongside the schema.
+//
+//  3. Variable-length tail fields. Type is "string" or "bytes" (no
+//     <N> suffix). These occupy an 8-byte tail pointer {relOffset
+//     uint32, length uint32} in the fixed payload; the data lives in
+//     the object tail after the fixed section. The constructor uses v1
+//     ObjectBuilder.SetText / SetBytes; reads go through a standalone
+//     accessor over v1's Object.Text / Object.Bytes (zero-copy
+//     sub-slice of the buffer). Like byte-array fields, they do NOT use
+//     the zapv1.Field generic handle (string/[]byte are not FieldKind
+//     members).
+//
+// List and nested-object tail fields are still hand-written (the
+// generic [zapv1.ListAt] / out-of-line pointer machinery).
+type Field struct {
+	// Name is the Go-visible field name (e.g. "Time"). Emitted into
+	// the schema's Fields struct as `<SchemaGoName>Fields.Name`.
+	Name string
+	// Type is the Go type as a string. Supported: scalar FieldKind
+	// types, "bytes<N>" for fixed byte arrays, or "string"/"bytes" for
+	// variable-length tails.
+	Type string
+	// Offset is the byte position within the fixed-size payload. For
+	// variable-length fields this is where the 8-byte tail pointer sits.
+	Offset uint32
+}
+
+// IsBytes reports whether the field is a fixed-width byte-array field
+// (type "bytes<N>"). Returns (n, true) on a match; (0, false) for
+// scalar fields.
+func (f Field) IsBytes() (int, bool) {
+	const prefix = "bytes"
+	if len(f.Type) <= len(prefix) || f.Type[:len(prefix)] != prefix {
+		return 0, false
+	}
+	n := 0
+	for i := len(prefix); i < len(f.Type); i++ {
+		c := f.Type[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// IsVarString reports whether the field is a variable-length string
+// (Type == "string"). A variable-length field occupies an 8-byte tail
+// pointer {relOffset uint32, length uint32} in the fixed payload; the
+// string bytes live in the object tail after the fixed section. Read
+// access is a standalone accessor over v1's Object.Text (a zero-copy
+// sub-slice of the buffer).
+func (f Field) IsVarString() bool { return f.Type == "string" }
+
+// IsVarBytes reports whether the field is a variable-length byte slice
+// (Type == "bytes", no <N> suffix). Same 8-byte tail-pointer layout as
+// IsVarString; read access is over v1's Object.Bytes.
+func (f Field) IsVarBytes() bool { return f.Type == "bytes" }
+
+// IsVariable reports whether the field is any variable-length tail field
+// (string or bytes). Variable fields are emitted as standalone accessor
+// functions (like fixed byte arrays) rather than in the Fields struct,
+// because string/[]byte are not zapv1.FieldKind members.
+func (f Field) IsVariable() bool { return f.IsVarString() || f.IsVarBytes() }
