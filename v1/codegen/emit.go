@@ -49,6 +49,9 @@ func fieldByteSize(f Field) (int, bool) {
 	if _, ok := f.IsList(); ok {
 		return 8, true // list pointer {relOffset uint32, length uint32}
 	}
+	if _, ok := f.IsNested(); ok {
+		return 4, true // object pointer {relOffset uint32} — singular, no length
+	}
 	if n, ok := f.IsBytes(); ok {
 		return n, true
 	}
@@ -171,10 +174,13 @@ func (%s) Name() string         { return %q }
 	var scalarFields []Field
 	var accessorFields []Field
 	var listFields []Field
+	var nestedFields []Field
 	for _, f := range s.Fields {
 		switch {
 		case isList(f):
 			listFields = append(listFields, f)
+		case isNested(f):
+			nestedFields = append(nestedFields, f)
 		default:
 			if _, isBytes := f.IsBytes(); isBytes || f.IsVariable() {
 				accessorFields = append(accessorFields, f)
@@ -208,10 +214,11 @@ func (%s) Name() string         { return %q }
 	}
 
 	// New constructor.
-	emitNewConstructor(w, s, scalarFields, accessorFields, listFields)
+	emitNewConstructor(w, s, scalarFields, accessorFields, listFields, nestedFields)
 	emitWrapFunction(w, s)
 	emitAccessorFields(w, s, accessorFields)
 	emitListSupport(w, s, listFields)
+	emitNestedSupport(w, s, nestedFields)
 	emitRegisterInit(w, s)
 
 	return nil
@@ -220,14 +227,43 @@ func (%s) Name() string         { return %q }
 // isList reports whether f is a list field (has an element descriptor).
 func isList(f Field) bool { _, ok := f.IsList(); return ok }
 
+// isNested reports whether f is a singular nested-object field.
+func isNested(f Field) bool { _, ok := f.IsNested(); return ok }
+
+// emitElemWrites writes one builder statement per element/nested field,
+// reading from srcExpr (e.g. "it" for a list element or "inner" for a
+// nested value) into the element Setter named setVar (e.g. "e"). Shared by
+// the list-element and nested-object build bodies so the two stay
+// orthogonal: scalars go through the typed [zapv1.Write] handle, while
+// string/bytes tails use [zapv1.WriteString]/[zapv1.WriteBytes] against the
+// element schema's Offset<Wire>_<Field> constants. wire is the element
+// schema's WireName (for those Offset constants); goName is its marker
+// GoName (for the <GoName>Fields handle). indent prefixes each line.
+func emitElemWrites(w io.Writer, goName, wire, setVar, srcExpr, indent string, fields []Field) {
+	for _, f := range fields {
+		switch {
+		case f.IsVarString():
+			fmt.Fprintf(w, "%szapv1.WriteString(%s, Offset%s_%s, %s.%s)\n",
+				indent, setVar, wire, f.Name, srcExpr, f.Name)
+		case f.IsVarBytes():
+			fmt.Fprintf(w, "%szapv1.WriteBytes(%s, Offset%s_%s, %s.%s)\n",
+				indent, setVar, wire, f.Name, srcExpr, f.Name)
+		default:
+			fmt.Fprintf(w, "%szapv1.Write(%s, %sFields.%s, %s.%s)\n",
+				indent, setVar, goName, f.Name, srcExpr, f.Name)
+		}
+	}
+}
+
 // emitNewConstructor writes the New%s function that builds a fresh
 // ZAP buffer with all fields set from parameters. The body uses v1
 // primitives (zap.NewBuilder, b.StartObject, ob.Set*, b.Finish) so
 // every step inlines into the caller.
-func emitNewConstructor(w io.Writer, s Schema, scalar, accessor, list []Field) {
+func emitNewConstructor(w io.Writer, s Schema, scalar, accessor, list, nested []Field) {
 	// Function signature — scalar fields first, then accessor fields
 	// (fixed byte arrays as [N]byte, variable string as string, variable
-	// bytes as []byte), then list fields ([]ElementValue), in declared
+	// bytes as []byte), then list fields ([]ElementValue), then nested
+	// fields (*NestedValue — pointer so nil encodes unset), in declared
 	// order.
 	var args []string
 	for _, f := range scalar {
@@ -247,6 +283,10 @@ func emitNewConstructor(w io.Writer, s Schema, scalar, accessor, list []Field) {
 	for _, f := range list {
 		elem, _ := f.IsList()
 		args = append(args, fmt.Sprintf("%s []%s", lowerFirst(f.Name), elem.Value))
+	}
+	for _, f := range nested {
+		nm, _ := f.IsNested()
+		args = append(args, fmt.Sprintf("%s *%s", lowerFirst(f.Name), nm.Value))
 	}
 
 	// Buffer capacity: fixed payload plus the byte length of every
@@ -296,12 +336,13 @@ func New%s(%s) (zapv1.View[%s], []byte) {
 		}
 	}
 
-	// List fields write their elements into the object tail AFTER every
-	// fixed/string/bytes field, via the typed [zapv1.WriteList] machinery
-	// bridged onto the hand-rolled ObjectBuilder by [zapv1.SetterFrom].
-	// Each element is built inline (one [zapv1.Write] per element field)
-	// so variable-length parents and list elements never interleave.
-	if len(list) > 0 {
+	// List and nested fields write into the object tail AFTER every
+	// fixed/string/bytes field, via the typed [zapv1.WriteList] /
+	// [zapv1.WriteNested] machinery bridged onto the hand-rolled
+	// ObjectBuilder by [zapv1.SetterFrom]. Each sub-object is built inline
+	// (one write per sub-field) so variable-length parents and tail objects
+	// never interleave.
+	if len(list) > 0 || len(nested) > 0 {
 		fmt.Fprintf(w, "\tls := zapv1.SetterFrom[%s](ob, b)\n", s.GoName)
 		for _, f := range list {
 			elem, _ := f.IsList()
@@ -309,11 +350,19 @@ func New%s(%s) (zapv1.View[%s], []byte) {
 				s.GoName, elem.Schema, s.WireName, f.Name, elem.Schema)
 			fmt.Fprintf(w, "\t\tfor _, it := range %s {\n", lowerFirst(f.Name))
 			fmt.Fprintf(w, "\t\t\tes.Append(func(e zapv1.Setter[%s]) {\n", elem.Schema)
-			for _, ef := range elem.Fields {
-				fmt.Fprintf(w, "\t\t\t\tzapv1.Write(e, %sFields.%s, it.%s)\n",
-					elem.Schema, ef.Name, ef.Name)
-			}
+			emitElemWrites(w, elem.Schema, elem.Wire, "e", "it", "\t\t\t\t", elem.Fields)
 			fmt.Fprintf(w, "\t\t\t})\n\t\t}\n\t})\n")
+		}
+		// Nested: a singular out-of-line object, written only when present
+		// (nil pointer => unset => null object pointer).
+		for _, f := range nested {
+			nm, _ := f.IsNested()
+			pname := lowerFirst(f.Name)
+			fmt.Fprintf(w, "\tif %s != nil {\n", pname)
+			fmt.Fprintf(w, "\t\tzapv1.WriteNested[%s, %s](ls, Offset%s_%s, func(e zapv1.Setter[%s]) {\n",
+				s.GoName, nm.Schema, s.WireName, f.Name, nm.Schema)
+			emitElemWrites(w, nm.Schema, nm.Wire, "e", pname, "\t\t\t", nm.Fields)
+			fmt.Fprintf(w, "\t\t})\n\t}\n")
 		}
 	}
 
@@ -452,7 +501,7 @@ func emitListSupport(w io.Writer, s Schema, list []Field) {
 		fmt.Fprintf(w, "// %s is the per-element input for the %s.%s list.\ntype %s struct {\n",
 			elem.Value, s.WireName, f.Name, elem.Value)
 		for _, ef := range elem.Fields {
-			fmt.Fprintf(w, "\t%s %s\n", ef.Name, ef.Type)
+			fmt.Fprintf(w, "\t%s %s\n", ef.Name, nestedFieldGoType(ef))
 		}
 		fmt.Fprintf(w, "}\n\n")
 
@@ -474,6 +523,59 @@ func %s%s(v zapv1.View[%s]) zapv1.List[%s] {
 			elem.Schema,
 			s.WireName, f.Name, s.GoName, elem.Schema,
 			s.GoName, elem.Schema, s.WireName, f.Name)
+	}
+}
+
+// emitNestedSupport writes, for each nested-object field: the value-input
+// struct the constructor accepts (by pointer), and the typed read accessor
+// returning a [zapv1.View][N] over the nested object in the tail (zero-copy;
+// the zero View when the field is unset/null). The singular peer of
+// [emitListSupport]. The nested schema's own Fields/Wrap live in its own
+// emitted file; here we need only its marker GoName and field shape.
+func emitNestedSupport(w io.Writer, s Schema, nested []Field) {
+	for _, f := range nested {
+		nm, _ := f.IsNested()
+
+		// Per-nested value-input struct (e.g. `type Inner struct{ ID
+		// uint64; Label string }`). The constructor takes *<Value>;
+		// WriteNested builds the object from it when non-nil.
+		fmt.Fprintf(w, "// %s is the value input for the singular %s.%s nested object.\ntype %s struct {\n",
+			nm.Value, s.WireName, f.Name, nm.Value)
+		for _, ef := range nm.Fields {
+			fmt.Fprintf(w, "\t%s %s\n", ef.Name, nestedFieldGoType(ef))
+		}
+		fmt.Fprintf(w, "}\n\n")
+
+		// Read accessor: a typed View over the nested object. Test the
+		// result with View.IsZero for the unset case.
+		fmt.Fprintf(w, `// %s%s returns the singular %s nested object of %s as a
+// zero-copy [zapv1.View][%s]. An unset (null) nested field yields the zero
+// View — test it with [zapv1.View.IsZero].
+func %s%s(v zapv1.View[%s]) zapv1.View[%s] {
+	return zapv1.NestedAt[%s, %s](v, Offset%s_%s)
+}
+
+`, s.WireName, f.Name, f.Name, s.WireName,
+			nm.Schema,
+			s.WireName, f.Name, s.GoName, nm.Schema,
+			s.GoName, nm.Schema, s.WireName, f.Name)
+	}
+}
+
+// nestedFieldGoType returns the Go type to use in a value-input struct
+// field: the declared scalar type, "string"/"[]byte" for variable tails,
+// or "[N]byte" for fixed byte arrays.
+func nestedFieldGoType(f Field) string {
+	switch {
+	case f.IsVarString():
+		return "string"
+	case f.IsVarBytes():
+		return "[]byte"
+	default:
+		if n, ok := f.IsBytes(); ok {
+			return fmt.Sprintf("[%d]byte", n)
+		}
+		return f.Type
 	}
 }
 
