@@ -46,6 +46,9 @@ var typeToSetMethod = map[string]string{
 // both scalar FieldKind types and "bytes<N>" byte-array types.
 // Returns (0, false) for unknown types.
 func fieldByteSize(f Field) (int, bool) {
+	if _, ok := f.IsList(); ok {
+		return 8, true // list pointer {relOffset uint32, length uint32}
+	}
 	if n, ok := f.IsBytes(); ok {
 		return n, true
 	}
@@ -90,8 +93,12 @@ func Emit(w io.Writer, s Schema) error {
 	// Detect offset overlap (each byte may belong to at most one field).
 	if s.Size > 0 {
 		owner := make([]string, s.Size)
-		// Reserve offset 0 for the kind discriminator.
-		owner[0] = "<kind>"
+		// Reserve offset 0 for the kind discriminator — UNLESS this is a
+		// flat list-element schema, whose slot carries no kind byte (fields
+		// may legitimately start at offset 0).
+		if !s.Element {
+			owner[0] = "<kind>"
+		}
 		for _, f := range s.Fields {
 			fsz, _ := fieldByteSize(f)
 			for i := 0; i < fsz; i++ {
@@ -132,7 +139,7 @@ const Size%s = %d
 		s.WireName, s.WireName, s.Size)
 
 	// Schema marker type.
-	fmt.Fprintf(w, `// %s is the v2 schema marker for %s. Methods are constant-
+	fmt.Fprintf(w, `// %s is the v1 schema marker for %s. Methods are constant-
 // returning so concrete-typed [zapv1.Wrap[%s]] calls fold to
 // literals at the call site.
 type %s struct{}
@@ -163,11 +170,17 @@ func (%s) Name() string         { return %q }
 	// []byte is a zapv1.FieldKind member.
 	var scalarFields []Field
 	var accessorFields []Field
+	var listFields []Field
 	for _, f := range s.Fields {
-		if _, isBytes := f.IsBytes(); isBytes || f.IsVariable() {
-			accessorFields = append(accessorFields, f)
-		} else {
-			scalarFields = append(scalarFields, f)
+		switch {
+		case isList(f):
+			listFields = append(listFields, f)
+		default:
+			if _, isBytes := f.IsBytes(); isBytes || f.IsVariable() {
+				accessorFields = append(accessorFields, f)
+			} else {
+				scalarFields = append(scalarFields, f)
+			}
 		}
 	}
 
@@ -195,22 +208,27 @@ func (%s) Name() string         { return %q }
 	}
 
 	// New constructor.
-	emitNewConstructor(w, s, scalarFields, accessorFields)
+	emitNewConstructor(w, s, scalarFields, accessorFields, listFields)
 	emitWrapFunction(w, s)
 	emitAccessorFields(w, s, accessorFields)
+	emitListSupport(w, s, listFields)
 	emitRegisterInit(w, s)
 
 	return nil
 }
 
+// isList reports whether f is a list field (has an element descriptor).
+func isList(f Field) bool { _, ok := f.IsList(); return ok }
+
 // emitNewConstructor writes the New%s function that builds a fresh
 // ZAP buffer with all fields set from parameters. The body uses v1
 // primitives (zap.NewBuilder, b.StartObject, ob.Set*, b.Finish) so
 // every step inlines into the caller.
-func emitNewConstructor(w io.Writer, s Schema, scalar, accessor []Field) {
+func emitNewConstructor(w io.Writer, s Schema, scalar, accessor, list []Field) {
 	// Function signature — scalar fields first, then accessor fields
 	// (fixed byte arrays as [N]byte, variable string as string, variable
-	// bytes as []byte) in declared order.
+	// bytes as []byte), then list fields ([]ElementValue), in declared
+	// order.
 	var args []string
 	for _, f := range scalar {
 		args = append(args, fmt.Sprintf("%s %s", lowerFirst(f.Name), f.Type))
@@ -225,6 +243,10 @@ func emitNewConstructor(w io.Writer, s Schema, scalar, accessor []Field) {
 			n, _ := f.IsBytes()
 			args = append(args, fmt.Sprintf("%s [%d]byte", lowerFirst(f.Name), n))
 		}
+	}
+	for _, f := range list {
+		elem, _ := f.IsList()
+		args = append(args, fmt.Sprintf("%s []%s", lowerFirst(f.Name), elem.Value))
 	}
 
 	// Buffer capacity: fixed payload plus the byte length of every
@@ -247,9 +269,13 @@ func emitNewConstructor(w io.Writer, s Schema, scalar, accessor []Field) {
 func New%s(%s) (zapv1.View[%s], []byte) {
 	b := zap.NewBuilder(%s)
 	ob := b.StartObject(Size%s)
-	ob.SetUint8(0, uint8(Kind%s))
 `, s.WireName, s.WireName, s.WireName, strings.Join(args, ", "), s.GoName,
-		capExpr, s.WireName, s.WireName)
+		capExpr, s.WireName)
+	// Flat list-element slots carry no kind byte; top-level messages stamp
+	// the discriminator at offset 0.
+	if !s.Element {
+		fmt.Fprintf(w, "\tob.SetUint8(0, uint8(Kind%s))\n", s.WireName)
+	}
 
 	for _, f := range scalar {
 		fmt.Fprintf(w, "\tob.%s(Offset%s_%s, %s)\n",
@@ -267,6 +293,27 @@ func New%s(%s) (zapv1.View[%s], []byte) {
 			// Fixed array passed as a slice via [:] so SetBytesFixed gets []byte.
 			fmt.Fprintf(w, "\tob.SetBytesFixed(Offset%s_%s, %s[:])\n",
 				s.WireName, f.Name, lowerFirst(f.Name))
+		}
+	}
+
+	// List fields write their elements into the object tail AFTER every
+	// fixed/string/bytes field, via the typed [zapv1.WriteList] machinery
+	// bridged onto the hand-rolled ObjectBuilder by [zapv1.SetterFrom].
+	// Each element is built inline (one [zapv1.Write] per element field)
+	// so variable-length parents and list elements never interleave.
+	if len(list) > 0 {
+		fmt.Fprintf(w, "\tls := zapv1.SetterFrom[%s](ob, b)\n", s.GoName)
+		for _, f := range list {
+			elem, _ := f.IsList()
+			fmt.Fprintf(w, "\tzapv1.WriteList[%s, %s](ls, Offset%s_%s, func(es *zapv1.ElemSetter[%s]) {\n",
+				s.GoName, elem.Schema, s.WireName, f.Name, elem.Schema)
+			fmt.Fprintf(w, "\t\tfor _, it := range %s {\n", lowerFirst(f.Name))
+			fmt.Fprintf(w, "\t\t\tes.Append(func(e zapv1.Setter[%s]) {\n", elem.Schema)
+			for _, ef := range elem.Fields {
+				fmt.Fprintf(w, "\t\t\t\tzapv1.Write(e, %sFields.%s, it.%s)\n",
+					elem.Schema, ef.Name, ef.Name)
+			}
+			fmt.Fprintf(w, "\t\t\t})\n\t\t}\n\t})\n")
 		}
 	}
 
@@ -296,11 +343,19 @@ func Wrap%s(b []byte) (zapv1.View[%s], error) {
 		return zapv1.View[%s]{}, err
 	}
 	root := msg.Root()
-	if got := root.Uint8(0); got != uint8(Kind%s) {
+`, s.WireName, s.WireName, s.WireName, s.GoName, s.GoName)
+
+	// Top-level messages validate the kind discriminator at offset 0; flat
+	// list-element schemas carry no kind byte, so they skip the check.
+	if !s.Element {
+		fmt.Fprintf(w, `	if got := root.Uint8(0); got != uint8(Kind%s) {
 		return zapv1.View[%s]{}, zapv1.NewSchemaError(
 			Kind%s, zapv1.KindByte(got), %q)
 	}
-	data := msg.Bytes()
+`, s.WireName, s.GoName, s.WireName, s.WireName)
+	}
+
+	fmt.Fprintf(w, `	data := msg.Bytes()
 	rootOff := root.Offset()
 	end := rootOff + Size%s
 	if end > len(data) {
@@ -309,12 +364,7 @@ func Wrap%s(b []byte) (zapv1.View[%s], error) {
 	return zapv1.AsView[%s](zapv1.RawFromSlices(data, rootOff, end)), nil
 }
 
-`, s.WireName, s.WireName,
-		s.WireName, s.GoName,
-		s.GoName,
-		s.WireName, s.GoName,
-		s.WireName, s.WireName,
-		s.WireName, s.GoName)
+`, s.WireName, s.GoName)
 }
 
 // emitByteFieldAccessors emits per-byte-array-field typed accessor
@@ -384,6 +434,46 @@ func %s%s(v zapv1.View[%s]) [%d]byte {
 				n,
 				n)
 		}
+	}
+}
+
+// emitListSupport writes, for each list field: the per-element value
+// input struct the constructor accepts, and the typed read accessor that
+// returns a [zapv1.List][E] over the object tail (range-over-func ready,
+// zero-copy). The element schema's own Fields/Wrap live in its emitted
+// file; here we only need its marker GoName and field shape.
+func emitListSupport(w io.Writer, s Schema, list []Field) {
+	for _, f := range list {
+		elem, _ := f.IsList()
+
+		// Per-element value-input struct (e.g. `type Item struct{ ID,
+		// Value uint64 }`). The constructor takes []<Value>; WriteList
+		// builds each element from it.
+		fmt.Fprintf(w, "// %s is the per-element input for the %s.%s list.\ntype %s struct {\n",
+			elem.Value, s.WireName, f.Name, elem.Value)
+		for _, ef := range elem.Fields {
+			fmt.Fprintf(w, "\t%s %s\n", ef.Name, ef.Type)
+		}
+		fmt.Fprintf(w, "}\n\n")
+
+		// Read accessor: a typed, range-over-func-ready list view.
+		fmt.Fprintf(w, `// %s%s returns the variable-length %s list of %s as a
+// range-over-func-ready [zapv1.List][%s]. Zero-copy: each element view
+// indexes straight into the underlying buffer.
+//
+//	for it := range %s%s(view).All() {
+//	    // zapv1.Read(it, %sFields.X)
+//	}
+func %s%s(v zapv1.View[%s]) zapv1.List[%s] {
+	return zapv1.ListAt[%s, %s](v, Offset%s_%s)
+}
+
+`, s.WireName, f.Name, f.Name, s.WireName,
+			elem.Schema,
+			s.WireName, f.Name,
+			elem.Schema,
+			s.WireName, f.Name, s.GoName, elem.Schema,
+			s.GoName, elem.Schema, s.WireName, f.Name)
 	}
 }
 

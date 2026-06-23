@@ -3,7 +3,7 @@
 
 package codegen
 
-// Schema is the declarative description of a ZAP v2 schema. The
+// Schema is the declarative description of a ZAP v1 schema. The
 // codegen tool consumes a [Schema] and emits a per-schema *.go file
 // with the Wrap/Build/Read/Write functions hand-rolled to inline.
 //
@@ -46,6 +46,15 @@ type Schema struct {
 	// Default is false — schemas with globally-unique Kind bytes
 	// (LP-201, LP-208, LP-211, LP-214, LP-218) DO register at init.
 	SkipRegistry bool
+	// Element marks this schema as a LIST ELEMENT: a flat, fixed-size
+	// value slot with NO kind discriminator byte at offset 0 (fields may
+	// start at offset 0), built inline by a parent's [zapv1.WriteList] and
+	// read via [zapv1.List][E].At — never wrapped as a top-level message.
+	// The Kind()/Size()/Name() methods are still emitted (List[E] and the
+	// registry need the Schema interface), but Kind is NOT stored in the
+	// slot and Wrap does not validate it. Default false (top-level kinded
+	// message: offset 0 reserved for the discriminator).
+	Element bool
 }
 
 // Field describes one fixed-size field in a schema.
@@ -89,6 +98,40 @@ type Field struct {
 	// Offset is the byte position within the fixed-size payload. For
 	// variable-length fields this is where the 8-byte tail pointer sits.
 	Offset uint32
+	// Elem, when non-nil, marks this field as a variable-length LIST of a
+	// fixed-size element schema (Type is ignored for list fields). The
+	// field occupies an 8-byte list pointer {relOffset, length} at Offset;
+	// the elements live in the object tail and are read via [zapv1.ListAt].
+	Elem *ListElem
+}
+
+// ListElem describes the element type of a list field. The element must
+// be a FIXED-SIZE schema (scalars + fixed byte arrays only — no
+// variable-length tails of its own), so every element is a flat
+// Stride-byte slot the list machinery can index in O(1).
+type ListElem struct {
+	// Schema is the element schema's marker GoName, e.g. "ItemSchema".
+	// Emitted as the List[E] / WriteList[S,E] / ListAt[S,E] type param.
+	Schema string
+	// Value is the Go value-struct the constructor accepts per element,
+	// e.g. "Item". Emitted as `type Value struct { ...Fields... }` and the
+	// list parameter is `[]Value`.
+	Value string
+	// Stride is the element's fixed payload size in bytes (its Size()).
+	Stride int
+	// Fields are the element's scalar fields, in order. Used to emit the
+	// Value struct and the per-element WriteList body (one zapv1.Write per
+	// field, from the value struct into the element Setter).
+	Fields []Field
+}
+
+// IsList reports whether the field is a variable-length list of a
+// fixed-size element schema, returning the element descriptor.
+func (f Field) IsList() (*ListElem, bool) {
+	if f.Elem != nil {
+		return f.Elem, true
+	}
+	return nil, false
 }
 
 // IsBytes reports whether the field is a fixed-width byte-array field
