@@ -98,6 +98,75 @@ func TestEmit_NestedField(t *testing.T) {
 	}
 }
 
+// TestEmit_TailedListRoutesToNested checks the codegen's automatic
+// routing: a repeated field whose element carries a string tail must use
+// the out-of-line ListNested machinery, while a scalar-only element stays
+// in the inline List. One declaration shape, the generator picks the
+// correct wire encoding.
+func TestEmit_TailedListRoutesToNested(t *testing.T) {
+	t.Parallel()
+
+	// Element WITH a string tail -> ListNested.
+	tailed := codegen.Schema{
+		GoName: "ParentSchema", WireName: "Parent", Kind: 0x61, Size: 9,
+		Package: "x",
+		Fields: []codegen.Field{
+			{Name: "Kids", Offset: 1, Elem: &codegen.ListElem{
+				Schema: "KidSchema", Wire: "Kid", Value: "Kid", Stride: 16,
+				Fields: []codegen.Field{
+					{Name: "ID", Type: "uint64", Offset: 0},
+					{Name: "Name", Type: "string", Offset: 8},
+				},
+			}},
+		},
+	}
+	var tb bytes.Buffer
+	if err := codegen.Emit(&tb, tailed); err != nil {
+		t.Fatalf("Emit(tailed): %v", err)
+	}
+	out := tb.String()
+	mustParse(t, out)
+	for _, want := range []string{
+		"zapv1.WriteListNested[ParentSchema, KidSchema]",
+		"*zapv1.NestedElemSetter[KidSchema]",
+		"zapv1.ListNested[KidSchema]",
+		"zapv1.ListNestedAt[ParentSchema, KidSchema]",
+		"zapv1.WriteString(e, OffsetKid_Name, it.Name)", // element string write
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tailed list missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "zapv1.WriteList[ParentSchema, KidSchema]") {
+		t.Error("tailed element must NOT use the inline WriteList")
+	}
+
+	// Element with ONLY scalars -> inline List (unchanged).
+	flat := codegen.Schema{
+		GoName: "BagSchema", WireName: "Bag", Kind: 0x71, Size: 9,
+		Package: "x",
+		Fields: []codegen.Field{
+			{Name: "Nums", Offset: 1, Elem: &codegen.ListElem{
+				Schema: "NumSchema", Wire: "Num", Value: "Num", Stride: 8,
+				Fields: []codegen.Field{{Name: "V", Type: "uint64", Offset: 0}},
+			}},
+		},
+	}
+	var fb bytes.Buffer
+	if err := codegen.Emit(&fb, flat); err != nil {
+		t.Fatalf("Emit(flat): %v", err)
+	}
+	fout := fb.String()
+	mustParse(t, fout)
+	if !strings.Contains(fout, "zapv1.WriteList[BagSchema, NumSchema]") ||
+		!strings.Contains(fout, "zapv1.ListAt[BagSchema, NumSchema]") {
+		t.Errorf("scalar-only list must use inline List/WriteList\n%s", fout)
+	}
+	if strings.Contains(fout, "ListNested") {
+		t.Error("scalar-only list must NOT use ListNested")
+	}
+}
+
 // TestEmit_NestedElementHasOffsets checks the nested element schema emits
 // the Offset<Wire>_<Field> constants the parent's WriteString references,
 // so the two generated files compile together.

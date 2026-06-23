@@ -390,6 +390,29 @@ func (lb *ListBuilder) AddBytes(data []byte) {
 	lb.count += len(data)
 }
 
+// AddObjectPtr appends a 4-byte SIGNED relative pointer to an object at
+// absolute position targetPos (pass 0 for a null element). This is the
+// element kind for a list of out-of-line objects — the wire encoding of a
+// "repeated message" field, where each fixed-stride slot points to a tailed
+// object elsewhere in the buffer rather than inlining a fixed-size value.
+//
+// The relative offset is computed against THIS slot's position, so the
+// reader resolves it the same way [Object.Object] does: absOffset = slotPos
+// + int32(rel). Targets may precede the slot (negative rel) — the common
+// case, since a builder writes the objects first and the pointer array
+// after.
+func (lb *ListBuilder) AddObjectPtr(targetPos int) {
+	lb.b.grow(4)
+	if targetPos == 0 {
+		binary.LittleEndian.PutUint32(lb.b.buf[lb.b.pos:], 0)
+	} else {
+		rel := int32(targetPos - lb.b.pos)
+		binary.LittleEndian.PutUint32(lb.b.buf[lb.b.pos:], uint32(rel))
+	}
+	lb.b.pos += 4
+	lb.count++
+}
+
 // Finish returns the list offset and length.
 func (lb *ListBuilder) Finish() (offset int, length int) {
 	return lb.startPos, lb.count

@@ -49,28 +49,75 @@ func main() {
 		},
 	}
 
-	dir := filepath.Join("v1", "codegen", "testpkg", "nestwire")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	// repeatwire: a parent with a REPEATED tailed child (each child has a
+	// string), which the codegen must route to ListNested (not the inline
+	// List, whose fixed stride can't hold per-element tails).
+	childR := codegen.Schema{
+		GoName:   "ChildSchema",
+		WireName: "Child",
+		Kind:     0x62,
+		Size:     16, // ID @0 (u64), Name @8 (string tail-ptr)
+		Package:  "repeatwire",
+		Element:  true,
+		Fields: []codegen.Field{
+			{Name: "ID", Type: "uint64", Offset: 0},
+			{Name: "Name", Type: "string", Offset: 8},
+		},
 	}
-	for _, sc := range []struct {
-		s   codegen.Schema
-		out string
+	parentR := codegen.Schema{
+		GoName:   "ParentSchema",
+		WireName: "Parent",
+		Kind:     0x61,
+		Size:     17, // kind@0, Count@1 (u64), Children@9 (list-ptr, 8 bytes)
+		Package:  "repeatwire",
+		Fields: []codegen.Field{
+			{Name: "Count", Type: "uint64", Offset: 1},
+			{Name: "Children", Offset: 9, Elem: &codegen.ListElem{
+				Schema: "ChildSchema",
+				Wire:   "Child",
+				Value:  "Child",
+				Stride: 16,
+				Fields: []codegen.Field{
+					{Name: "ID", Type: "uint64", Offset: 0},
+					{Name: "Name", Type: "string", Offset: 8},
+				},
+			}},
+		},
+	}
+
+	for _, grp := range []struct {
+		pkg     string
+		schemas []struct {
+			s   codegen.Schema
+			out string
+		}
 	}{
-		{inner, "inner_zap.go"},
-		{outer, "outer_zap.go"},
+		{"nestwire", []struct {
+			s   codegen.Schema
+			out string
+		}{{inner, "inner_zap.go"}, {outer, "outer_zap.go"}}},
+		{"repeatwire", []struct {
+			s   codegen.Schema
+			out string
+		}{{childR, "child_zap.go"}, {parentR, "parent_zap.go"}}},
 	} {
-		f, err := os.Create(filepath.Join(dir, sc.out))
-		if err != nil {
+		dir := filepath.Join("v1", "codegen", "testpkg", grp.pkg)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if err := codegen.Emit(f, sc.s); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+		for _, sc := range grp.schemas {
+			f, err := os.Create(filepath.Join(dir, sc.out))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			if err := codegen.Emit(f, sc.s); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			f.Close()
+			fmt.Println("wrote", filepath.Join(dir, sc.out))
 		}
-		f.Close()
-		fmt.Println("wrote", filepath.Join(dir, sc.out))
 	}
 }
