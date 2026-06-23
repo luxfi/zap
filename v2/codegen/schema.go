@@ -23,9 +23,11 @@ type Schema struct {
 	Size int
 	// Package is the Go package the emitted file should live in.
 	Package string
-	// Fields is the ordered list of fixed-size fields. Variable-length
-	// tails (lists, bytes) are not declared here; they use the
-	// generic [zapv2.ListAt] / [zapv2.WriteList] machinery.
+	// Fields is the ordered list of fields: scalars, fixed byte arrays
+	// ("bytes<N>"), and variable-length tails ("string"/"bytes"). Each
+	// occupies a slot in the fixed payload (variable-length fields hold
+	// an 8-byte tail pointer there). List and nested-object tails are
+	// not declared here; they use the generic [zapv2.ListAt] machinery.
 	Fields []Field
 	// SkipRegistry suppresses the emit of `init() { zapv2.Register[S]
 	// (zapv2.DefaultRegistry) }`. Use for schema families that have a
@@ -64,17 +66,28 @@ type Schema struct {
 //     not a [zapv2.FieldKind] member; instead they get a typed
 //     accessor function emitted alongside the schema.
 //
-// Variable-length tail fields (lists, bytes, sub-objects) are NOT
-// declared here. They use the generic [zapv2.ListAt] / out-of-line
-// pointer machinery and require a hand-written accessor.
+//  3. Variable-length tail fields. Type is "string" or "bytes" (no
+//     <N> suffix). These occupy an 8-byte tail pointer {relOffset
+//     uint32, length uint32} in the fixed payload; the data lives in
+//     the object tail after the fixed section. The constructor uses v1
+//     ObjectBuilder.SetText / SetBytes; reads go through a standalone
+//     accessor over v1's Object.Text / Object.Bytes (zero-copy
+//     sub-slice of the buffer). Like byte-array fields, they do NOT use
+//     the zapv2.Field generic handle (string/[]byte are not FieldKind
+//     members).
+//
+// List and nested-object tail fields are still hand-written (the
+// generic [zapv2.ListAt] / out-of-line pointer machinery).
 type Field struct {
 	// Name is the Go-visible field name (e.g. "Time"). Emitted into
 	// the schema's Fields struct as `<SchemaGoName>Fields.Name`.
 	Name string
-	// Type is the Go type as a string. See Field doc for the supported
-	// set: scalar FieldKind types or "bytes<N>" for fixed byte arrays.
+	// Type is the Go type as a string. Supported: scalar FieldKind
+	// types, "bytes<N>" for fixed byte arrays, or "string"/"bytes" for
+	// variable-length tails.
 	Type string
-	// Offset is the byte position within the fixed-size payload.
+	// Offset is the byte position within the fixed-size payload. For
+	// variable-length fields this is where the 8-byte tail pointer sits.
 	Offset uint32
 }
 
@@ -99,3 +112,22 @@ func (f Field) IsBytes() (int, bool) {
 	}
 	return n, true
 }
+
+// IsVarString reports whether the field is a variable-length string
+// (Type == "string"). A variable-length field occupies an 8-byte tail
+// pointer {relOffset uint32, length uint32} in the fixed payload; the
+// string bytes live in the object tail after the fixed section. Read
+// access is a standalone accessor over v1's Object.Text (a zero-copy
+// sub-slice of the buffer).
+func (f Field) IsVarString() bool { return f.Type == "string" }
+
+// IsVarBytes reports whether the field is a variable-length byte slice
+// (Type == "bytes", no <N> suffix). Same 8-byte tail-pointer layout as
+// IsVarString; read access is over v1's Object.Bytes.
+func (f Field) IsVarBytes() bool { return f.Type == "bytes" }
+
+// IsVariable reports whether the field is any variable-length tail field
+// (string or bytes). Variable fields are emitted as standalone accessor
+// functions (like fixed byte arrays) rather than in the Fields struct,
+// because string/[]byte are not zapv2.FieldKind members.
+func (f Field) IsVariable() bool { return f.IsVarString() || f.IsVarBytes() }
