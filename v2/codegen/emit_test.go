@@ -76,15 +76,60 @@ func TestEmit_UnsupportedType(t *testing.T) {
 		Size:     16,
 		Package:  "bad",
 		Fields: []codegen.Field{
-			{Name: "X", Type: "string", Offset: 0},
+			// "complex128" is not a FieldKind, not "bytes<N>", and not a
+			// variable-length tail ("string"/"bytes") — genuinely unsupported.
+			{Name: "X", Type: "complex128", Offset: 8},
 		},
 	}
 	err := codegen.Emit(new(bytes.Buffer), s)
 	if err == nil {
-		t.Fatal("expected error for unsupported field type 'string'")
+		t.Fatal("expected error for unsupported field type 'complex128'")
 	}
-	if !strings.Contains(err.Error(), "string") {
+	if !strings.Contains(err.Error(), "complex128") {
 		t.Errorf("error %q should name the bad type", err.Error())
+	}
+}
+
+// TestEmit_VarLength: a schema with variable-length string + bytes
+// fields emits SetText/SetBytes in the constructor, standalone zero-copy
+// accessors over Object.Text/Object.Bytes, and grows the buffer estimate
+// by each tail value's length.
+func TestEmit_VarLength(t *testing.T) {
+	s := codegen.Schema{
+		GoName:   "VarSchema",
+		WireName: "VarTx",
+		Kind:     7,
+		Size:     24, // kind(0..7) + Name ptr(8@8) + Data ptr(8@16)
+		Package:  "varpkg",
+		Fields: []codegen.Field{
+			{Name: "Name", Type: "string", Offset: 8},
+			{Name: "Data", Type: "bytes", Offset: 16},
+		},
+		SkipRegistry: true,
+	}
+	var buf bytes.Buffer
+	if err := codegen.Emit(&buf, s); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	out := buf.String()
+	wants := []string{
+		"func NewVarTx(name string, data []byte)",          // arg types
+		"zap.HeaderSize + SizeVarTx + len(name) + len(data)", // buffer estimate
+		"ob.SetText(OffsetVarTx_Name, name)",
+		"ob.SetBytes(OffsetVarTx_Data, data)",
+		"func VarTxName(v zapv2.View[VarSchema]) string",
+		"return obj.Text(OffsetVarTx_Name)",
+		"func VarTxData(v zapv2.View[VarSchema]) []byte",
+		"return obj.Bytes(OffsetVarTx_Data)",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Errorf("emitted source missing %q\n---\n%s", want, out)
+		}
+	}
+	// Variable fields must NOT appear in the scalar Fields struct.
+	if strings.Contains(out, "Name zapv2.Field[") || strings.Contains(out, "Data zapv2.Field[") {
+		t.Errorf("variable fields must not be in the scalar Fields struct")
 	}
 }
 
