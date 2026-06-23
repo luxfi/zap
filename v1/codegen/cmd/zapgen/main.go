@@ -60,6 +60,7 @@ func main() {
 	flag.StringVar(&s.Package, "package", "", "output Go package name")
 	flag.Var(&fieldFlag{&s.Fields}, "field", "field spec Name:Type:Offset (repeatable)")
 	flag.StringVar(&outPath, "out", "", "output file path (default: stdout)")
+	flag.BoolVar(&s.SkipRegistry, "skip-registry", false, "do not emit init() global Register — for a PRIVATE kind namespace (e.g. a per-service schema set whose kind bytes are unique only within that service, not the shared zapv1.DefaultRegistry)")
 	flag.Parse()
 
 	if s.WireName == "" || s.GoName == "" || s.Package == "" || kind == 0 || size <= 0 {
