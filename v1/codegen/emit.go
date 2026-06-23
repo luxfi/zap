@@ -230,6 +230,21 @@ func isList(f Field) bool { _, ok := f.IsList(); return ok }
 // isNested reports whether f is a singular nested-object field.
 func isNested(f Field) bool { _, ok := f.IsNested(); return ok }
 
+// elemIsTailed reports whether a list element carries its own
+// variable-length tail (a string/bytes field, or a nested/list sub-field).
+// Such elements cannot live in a fixed-stride [zapv1.List] — they need the
+// out-of-line pointer-array [zapv1.ListNested] (the "repeated message"
+// encoding) so each element's tail has somewhere to go. Scalar-only (and
+// fixed-byte-only) elements stay in the tighter inline List.
+func elemIsTailed(elem *ListElem) bool {
+	for _, ef := range elem.Fields {
+		if ef.IsVariable() || isList(ef) || isNested(ef) {
+			return true
+		}
+	}
+	return false
+}
+
 // emitElemWrites writes one builder statement per element/nested field,
 // reading from srcExpr (e.g. "it" for a list element or "inner" for a
 // nested value) into the element Setter named setVar (e.g. "e"). Shared by
@@ -346,8 +361,14 @@ func New%s(%s) (zapv1.View[%s], []byte) {
 		fmt.Fprintf(w, "\tls := zapv1.SetterFrom[%s](ob, b)\n", s.GoName)
 		for _, f := range list {
 			elem, _ := f.IsList()
-			fmt.Fprintf(w, "\tzapv1.WriteList[%s, %s](ls, Offset%s_%s, func(es *zapv1.ElemSetter[%s]) {\n",
-				s.GoName, elem.Schema, s.WireName, f.Name, elem.Schema)
+			// Tailed elements (string/bytes/nested sub-fields) need the
+			// out-of-line pointer array; scalar-only elements stay inline.
+			writeFn, setterT := "WriteList", "ElemSetter"
+			if elemIsTailed(elem) {
+				writeFn, setterT = "WriteListNested", "NestedElemSetter"
+			}
+			fmt.Fprintf(w, "\tzapv1.%s[%s, %s](ls, Offset%s_%s, func(es *zapv1.%s[%s]) {\n",
+				writeFn, s.GoName, elem.Schema, s.WireName, f.Name, setterT, elem.Schema)
 			fmt.Fprintf(w, "\t\tfor _, it := range %s {\n", lowerFirst(f.Name))
 			fmt.Fprintf(w, "\t\t\tes.Append(func(e zapv1.Setter[%s]) {\n", elem.Schema)
 			emitElemWrites(w, elem.Schema, elem.Wire, "e", "it", "\t\t\t\t", elem.Fields)
@@ -505,24 +526,30 @@ func emitListSupport(w io.Writer, s Schema, list []Field) {
 		}
 		fmt.Fprintf(w, "}\n\n")
 
-		// Read accessor: a typed, range-over-func-ready list view.
+		// Read accessor: a typed, range-over-func-ready list view. Tailed
+		// elements use the out-of-line ListNested[E]; scalar-only elements
+		// use the inline List[E]. Both are zero-copy and range-over-func.
+		listT, atFn := "List", "ListAt"
+		if elemIsTailed(elem) {
+			listT, atFn = "ListNested", "ListNestedAt"
+		}
 		fmt.Fprintf(w, `// %s%s returns the variable-length %s list of %s as a
-// range-over-func-ready [zapv1.List][%s]. Zero-copy: each element view
+// range-over-func-ready [zapv1.%s][%s]. Zero-copy: each element view
 // indexes straight into the underlying buffer.
 //
 //	for it := range %s%s(view).All() {
 //	    // zapv1.Read(it, %sFields.X)
 //	}
-func %s%s(v zapv1.View[%s]) zapv1.List[%s] {
-	return zapv1.ListAt[%s, %s](v, Offset%s_%s)
+func %s%s(v zapv1.View[%s]) zapv1.%s[%s] {
+	return zapv1.%s[%s, %s](v, Offset%s_%s)
 }
 
 `, s.WireName, f.Name, f.Name, s.WireName,
-			elem.Schema,
+			listT, elem.Schema,
 			s.WireName, f.Name,
 			elem.Schema,
-			s.WireName, f.Name, s.GoName, elem.Schema,
-			s.GoName, elem.Schema, s.WireName, f.Name)
+			s.WireName, f.Name, s.GoName, listT, elem.Schema,
+			atFn, s.GoName, elem.Schema, s.WireName, f.Name)
 	}
 }
 
