@@ -105,13 +105,13 @@ test("encode→decode round-trip", () => {
   const b = new Builder(256);
   const ob = b.startObject(96);
   ob.setText(0, "satoshi.nakamoto@example.com");
-  ob.setText(32, "liquidity");
-  ob.setUint32(64, 1000001);
+  ob.setText(32, "example");
+  ob.setUint32(64, 1234567);
   ob.finishAsRoot();
   const r = Message.parse(unhex(hex(b.finish()))).root();
   assert.equal(r.text(0), "satoshi.nakamoto@example.com");
-  assert.equal(r.text(32), "liquidity");
-  assert.equal(r.uint32(64), 1000001);
+  assert.equal(r.text(32), "example");
+  assert.equal(r.uint32(64), 1234567);
 });
 
 test("opcode parity with Go ProcedureOpcode", () => {
