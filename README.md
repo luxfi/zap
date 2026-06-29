@@ -1,3 +1,5 @@
+<p align="center"><img src=".github/hero.svg" alt="zap" width="880"></p>
+
 # ZAP
 
 **Z**ero-copy **A**pplication **P**rotocol for Lux.
