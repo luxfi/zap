@@ -170,6 +170,44 @@ Reference = handler latency on a serialized control-stream path
 overlaps handlers in flight (peak inflight = 32 observed in
 `TestQUICCallConcurrent`).
 
+## Locality-adaptive Router (P1) — `router.go`, `interface.go`
+
+The one-Send-API router that decouples WHO (`Destination`) from HOW
+(`Interface`) from the message (`Payload`), so a caller never names a port or a
+transport:
+
+```go
+r := zap.NewRouter()
+r.Register(zap.NewNodeInterface(node))     // network fallback, Cost 10 (conn_pq wire)
+inproc := zap.NewInProcessInterface()      // Cost 0
+inproc.Register("hanzo.o11y.traces", handler)
+r.Register(inproc)
+
+r.Send(ctx, "hanzo.o11y.traces", zap.Payload{Value: spans, Encode: encodeFn})
+```
+
+**The routing rule is a Cost table, not a caller branch.** `Send` picks the
+cheapest `Interface` whose `CanReach(dst)` is true. When the destination lives in
+THIS binary, `InProcessInterface` (Cost 0) wins and the handler is called with
+the LIVE `Payload.Value` — zero serialization, zero copy, zero socket. `Encode`
+(the zero-copy wire form) is invoked ONLY when a network `Interface` is chosen,
+and only then. "If in-process skip TCP; else use the wire" falls out for free.
+
+Three "transport"-ish names, kept orthogonal — do not conflate:
+- `zap.Transport` (int enum `TransportTCP`/`TransportQUIC`) — which wire ONE Node
+  speaks. `NodeInterface` adapts such a Node into the router.
+- `zap.Router` — this P1 locality-adaptive router over many `Interface`s.
+- `github.com/luxfi/zap/transport` — the GPU-aware buffer subpackage (LP-203).
+
+This is Reticulum's model made post-quantum + zero-copy: `Destination` is a
+capability aspect today; the announce-routed PQ-identity destination hash
+(multi-hop, mDNS/K8s-SRV discovery interfaces, UDP/QUIC/radio interfaces) refines
+it in later phases WITHOUT moving the `Send` call site. `Node` is unchanged;
+`NodeInterface` adapts it. First consumer: hanzo/cloud o11y telemetry (cloud's own
+spans → in-process → ClickHouse sink, never the wire). See `router_test.go`
+(7 tests: cost-preference, zero-serialize proof, fallback, no-route, sort,
+re-register, non-encodable-refused).
+
 ## DexSession orchestration (`dexsession/`)
 
 ZAP/Cap'n-Proto orchestration layer for the Lux DEX: capability transport +
