@@ -6,6 +6,7 @@ package zap
 import (
 	"encoding/binary"
 	"math"
+	"sync"
 )
 
 // Builder constructs ZAP messages.
@@ -215,10 +216,14 @@ func (ob *ObjectBuilder) SetBytes(fieldOffset int, v []byte) {
 		return
 	}
 
-	// Store the data and length; the relative offset is patched in Finish()
+	// Store the data and length; the relative offset is patched in Finish().
+	// ZERO-COPY: v is retained (not copied) — the caller must keep v valid and
+	// unmodified until Finish()/FinishAsRoot() returns. Every in-tree builder
+	// constructs and finishes in one frame, so this is free; it removes one
+	// alloc+copy per bytes field (the write hot path's dominant cost).
 	ob.offsets = append(ob.offsets, offsetEntry{
 		fieldOffset: fieldOffset,
-		data:        append([]byte(nil), v...), // copy the data
+		data:        v,
 	})
 
 	// Write the length now
@@ -416,6 +421,32 @@ func (lb *ListBuilder) AddObjectPtr(targetPos int) {
 // Finish returns the list offset and length.
 func (lb *ListBuilder) Finish() (offset int, length int) {
 	return lb.startPos, lb.count
+}
+
+// ---- Builder pool (write-side counterpart to the read bufpool) ----
+
+// builderPool recycles Builders across messages. A pooled Builder keeps its
+// grown backing array, so steady-state message construction allocates zero
+// builder buffers. Byte-safety on reuse is unconditional: ensureField
+// zero-fills every extended span and align zero-fills padding, so a reused
+// (dirty) buffer emits bytes identical to a fresh one.
+var builderPool = sync.Pool{
+	New: func() any { return NewBuilder(512) },
+}
+
+// GetBuilder returns a pooled Builder, reset and ready to write a Version2
+// message. Callers MUST copy out the bytes returned by Finish (which aliases
+// the Builder's buffer) before calling PutBuilder.
+func GetBuilder() *Builder {
+	b := builderPool.Get().(*Builder)
+	b.Reset()
+	return b
+}
+
+// PutBuilder returns a Builder to the pool. The slice previously returned by
+// b.Finish() must no longer be referenced (it aliases b's buffer).
+func PutBuilder(b *Builder) {
+	builderPool.Put(b)
 }
 
 // Helper functions
