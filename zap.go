@@ -637,12 +637,40 @@ func (l List) Uint64(i int) uint64 {
 	return binary.LittleEndian.Uint64(l.msg.data[pos:])
 }
 
-// Object returns an object list element.
+// Object returns an INLINE object list element — element i is a fixed-stride
+// object of elemSize bytes living at l.offset + i*elemSize.
 func (l List) Object(i int, elemSize int) Object {
 	if i < 0 || i >= l.length {
 		return Object{}
 	}
 	return Object{msg: l.msg, offset: l.offset + i*elemSize}
+}
+
+// ObjectPtr returns the i'th element of an OUT-OF-LINE object list — the read
+// counterpart to [ListBuilder.AddObjectPtr]. Element i is a 4-byte SIGNED
+// relative pointer at l.offset + i*4; it is dereferenced as absOffset =
+// slotPos + int32(rel), exactly like [Object.Object]. A null (0) element or an
+// out-of-range target yields the zero Object (IsNull). This is the canonical
+// way to read a "repeated message" field where each element is a tailed object
+// rather than a fixed-size inline value — the decomplected replacement for the
+// byte-blob envelope-concat pattern.
+func (l List) ObjectPtr(i int) Object {
+	if i < 0 || i >= l.length {
+		return Object{}
+	}
+	pos := l.offset + i*4
+	if pos+4 > len(l.msg.data) {
+		return Object{}
+	}
+	rel := int32(binary.LittleEndian.Uint32(l.msg.data[pos:]))
+	if rel == 0 {
+		return Object{} // null element
+	}
+	absOffset := pos + int(rel)
+	if absOffset < HeaderSize || absOffset >= len(l.msg.data) {
+		return Object{}
+	}
+	return Object{msg: l.msg, offset: absOffset}
 }
 
 // Bytes returns the raw bytes of the list (for byte lists).
