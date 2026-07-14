@@ -330,17 +330,22 @@ func (b *Builder) WriteText(s string) int {
 type ListBuilder struct {
 	b        *Builder
 	startPos int
-	elemSize int
 	count    int
 }
 
-// StartList starts building a list.
-func (b *Builder) StartList(elemSize int) *ListBuilder {
+// StartList starts building a list. Returns a VALUE (not a heap pointer): the
+// Add*/Finish methods take pointer receivers, and every caller binds the result
+// to an addressable local (`lb := b.StartList(...)`), so Go auto-addresses the
+// local and count mutations accumulate on it — no per-list heap allocation.
+// Mirrors the value-typed StartObject. elemSize is unused (the stride is
+// implicit in which Add* the caller invokes) and kept only as a documenting
+// param.
+func (b *Builder) StartList(elemSize int) ListBuilder {
+	_ = elemSize
 	b.align(Alignment)
-	return &ListBuilder{
+	return ListBuilder{
 		b:        b,
 		startPos: b.pos,
-		elemSize: elemSize,
 	}
 }
 

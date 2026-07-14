@@ -34,7 +34,7 @@ import (
 // passed by value.
 type Builder[S Schema] struct {
 	b  *zap.Builder
-	ob *zap.ObjectBuilder
+	ob zap.ObjectBuilder
 }
 
 // NewBuilderFor returns a fresh Builder[S] sized for S's fixed
@@ -55,7 +55,7 @@ func NewBuilderFor[S Schema]() Builder[S] {
 
 // startBuild is the non-generic, shape-free counterpart of
 // [NewBuilderFor]: allocate a v1 [*zap.Builder] sized for the fixed
-// payload, anchor an [*zap.ObjectBuilder] at the root, and write the
+// payload, anchor an [zap.ObjectBuilder] at the root, and write the
 // kind discriminator. The caller (per-schema shim, codegen, or
 // generic [NewBuilderFor]) supplies size and kind as constants — the
 // Go compiler folds them at compile time when called from a concrete
@@ -64,7 +64,7 @@ func NewBuilderFor[S Schema]() Builder[S] {
 // Centralizing the allocation here keeps the generic [NewBuilderFor]
 // body tiny and lets the inliner fold it into the caller — same
 // trick as [WrapRaw] / [parseHeaderImpl].
-func startBuild(size int, kind uint8) (*zap.Builder, *zap.ObjectBuilder) {
+func startBuild(size int, kind uint8) (*zap.Builder, zap.ObjectBuilder) {
 	b := zap.NewBuilder(zap.HeaderSize + size)
 	ob := b.StartObject(size)
 	ob.SetUint8(0, kind)
@@ -93,7 +93,7 @@ func (bb Builder[S]) Finish() (View[S], []byte) {
 // The Raw's payload is the fixed-section slice; the caller wraps it
 // as [View[S]] via [AsView]. The buffer is returned for callers that
 // need the on-wire bytes.
-func finishBuild(b *zap.Builder, ob *zap.ObjectBuilder, size int) (Raw, []byte) {
+func finishBuild(b *zap.Builder, ob zap.ObjectBuilder, size int) (Raw, []byte) {
 	rootOff := ob.FinishAsRoot()
 	buf := b.Finish()
 	end := rootOff + size
