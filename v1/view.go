@@ -388,13 +388,13 @@ func Build[S Schema](init func(Setter[S])) (View[S], []byte) {
 // them and is itself reachable from the caller's stack). Setter values
 // are NOT safe to retain after the builder's Finish returns.
 type Setter[S Schema] struct {
-	ob *zap.ObjectBuilder
+	ob zap.ObjectBuilder
 	b  *zap.Builder
 }
 
 // raw exposes the underlying builder for advanced primitives that
 // need to write variable-length tails (Text, Bytes, Lists). It is
 // unexported; the variable-length writers in [list.go] use it.
-func (s Setter[S]) raw() (*zap.ObjectBuilder, *zap.Builder) {
+func (s Setter[S]) raw() (zap.ObjectBuilder, *zap.Builder) {
 	return s.ob, s.b
 }

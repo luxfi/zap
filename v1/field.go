@@ -202,7 +202,7 @@ func WriteB[S Schema, T FieldKind](bb Builder[S], f Field[S, T], val T) {
 // against unsafe.Sizeof on the type parameter, each branch calling
 // one v1 ObjectBuilder.Set* method, folds to one MOV per concrete T
 // after generic instantiation and inlining.
-func writeAt[T FieldKind](ob *zap.ObjectBuilder, offset uint32, val T) {
+func writeAt[T FieldKind](ob zap.ObjectBuilder, offset uint32, val T) {
 	off := int(offset)
 	switch unsafe.Sizeof(val) {
 	case 1:
