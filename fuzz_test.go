@@ -11,7 +11,7 @@ import (
 
 // buildSeedMessage builds a valid ZAP message using the Builder for use as
 // fuzz seed corpus. Returns the raw bytes.
-func buildSeedMessage(fields func(ob *ObjectBuilder)) []byte {
+func buildSeedMessage(fields func(ob ObjectBuilder)) []byte {
 	b := NewBuilder(256)
 	ob := b.StartObject(64)
 	fields(ob)
@@ -36,12 +36,12 @@ func buildSeedMessage(fields func(ob *ObjectBuilder)) []byte {
 func FuzzParse(f *testing.F) {
 	// Seed corpus: every valid construction we can think of, plus the
 	// adversarial buffers that exercised RED-HIGH-1/2/3.
-	f.Add(buildSeedMessage(func(ob *ObjectBuilder) { ob.SetUint64(0, 0xDEADBEEF) }))
-	f.Add(buildSeedMessage(func(ob *ObjectBuilder) {
+	f.Add(buildSeedMessage(func(ob ObjectBuilder) { ob.SetUint64(0, 0xDEADBEEF) }))
+	f.Add(buildSeedMessage(func(ob ObjectBuilder) {
 		ob.SetUint32(0, 42)
 		ob.SetText(4, "round-trip")
 	}))
-	f.Add(buildSeedMessage(func(ob *ObjectBuilder) {
+	f.Add(buildSeedMessage(func(ob ObjectBuilder) {
 		ob.SetBool(0, true)
 		ob.SetBytes(4, []byte{0xCA, 0xFE, 0xBA, 0xBE})
 	}))
@@ -56,7 +56,7 @@ func FuzzParse(f *testing.F) {
 		f.Add(hdr)
 	}
 	// Seed with an empty list (length=0, offset=0).
-	f.Add(buildSeedMessage(func(ob *ObjectBuilder) {
+	f.Add(buildSeedMessage(func(ob ObjectBuilder) {
 		ob.SetList(0, 0, 0)
 		ob.SetUint64(8, 1)
 	}))
@@ -123,12 +123,12 @@ func FuzzParse(f *testing.F) {
 // produce a valid Message with accessible root.
 func FuzzZAPParse(f *testing.F) {
 	// Seed 1: valid minimal message (uint64 field)
-	f.Add(buildSeedMessage(func(ob *ObjectBuilder) {
+	f.Add(buildSeedMessage(func(ob ObjectBuilder) {
 		ob.SetUint64(0, 0xDEADBEEF)
 	}))
 
 	// Seed 2: valid message with text
-	f.Add(buildSeedMessage(func(ob *ObjectBuilder) {
+	f.Add(buildSeedMessage(func(ob ObjectBuilder) {
 		ob.SetUint32(0, 42)
 		ob.SetText(4, "hello fuzz")
 		ob.SetBool(12, true)
@@ -251,7 +251,7 @@ func FuzzZAPRoundtrip(f *testing.F) {
 // bytes. Parse must return an error or a valid message -- never panic.
 func FuzzZAPMalformedHeader(f *testing.F) {
 	// Build a real message to use as the base
-	base := buildSeedMessage(func(ob *ObjectBuilder) {
+	base := buildSeedMessage(func(ob ObjectBuilder) {
 		ob.SetUint64(0, 12345)
 		ob.SetUint64(8, 67890)
 	})
