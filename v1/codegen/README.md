@@ -57,7 +57,7 @@ length tail; the actual tail read/write code is hand-written using
 | File | LP | Schemas | Schema-ID range |
 |---|---|---|---|
 | `lp-182-consensus.json` | LP-182 | 8 (QuasarCert, QBlock, WitnessProof, MagnetarAggregateCert, PolarisLegs, QuasarSig, TxAuthEnvelope, PQPermit) | 0x01..0x0B |
-| `lp-186-vms.json` | LP-186 | 38 across 12 VMs (aivm:3 / bridgevm:3 / dexvm:3 / evm:2 / graphvm:3 / identityvm:4 / keyvm:3 / oraclevm:2 / quantumvm:3 / relayvm:3 / thresholdvm:4 / zkvm:5) | per-VM kind bytes 0x01..0x05 within each VM's `<vm>wire` package namespace |
+| `lp-186-vms.json` | LP-186 | 38 across 12 VMs (aivm:3 / bridgevm:3 / dexvm:3 / evm:2 / graphvm:3 / identityvm:4 / keyvm:3 / oraclevm:2 / quantumvm:3 / relayvm:3 / mpcvm:4 / zkvm:5) | per-VM kind bytes 0x01..0x05 within each VM's `<vm>wire` package namespace |
 | `lp-201-p2p.json` | LP-201 | 16 (ConsensusVote ... DHTStore) | 0xD0..0xDF |
 | `lp-208-dag.json` | LP-208 | 2 (DAGHeader, DAGBody) | 0xE0..0xE1 |
 | `lp-211-cross-shard.json` | LP-211 | 6 (CrossShardTxGroup ... CrossShardAbortNotify) | 0xE2..0xE7 |

@@ -1,6 +1,6 @@
 {
   "lp": "lp-186",
-  "description": "Lux chains-VM wire (LP-186 §Schema table). 38 schemas declared across 12 VMs (aivm, bridgevm, dexvm, evm, graphvm, identityvm, keyvm, oraclevm, quantumvm, relayvm, thresholdvm, zkvm). Per LP-186 §Per-VM wire packages, each schema's byte layout is the canonical fixed-section comment block in ~/work/lux/chains/<vm>/wire/<schema>.go. Each variable-length bytes-tail occupies an 8-byte slot in the fixed section (Off uint32 + Len uint32), per ZAP SetBytes layout (builder.go:208). Kinds declared in LP-186 spec but with no wire file in tree are deferred — see codegen/README.md §Deferred. Each VM's package namespace is <vm>wire to prevent Block/etc symbol clashes across the 12 VMs. Kind bytes are LOCAL to each VM's package (KindBlock=0x01 in aivmwire is distinct from KindBlock=0x01 in bridgevmwire) — skip_registry suppresses init() registration that would otherwise panic on duplicate kind bytes in the global zapv2.DefaultRegistry.",
+  "description": "Lux chains-VM wire (LP-186 §Schema table). 38 schemas declared across 12 VMs (aivm, bridgevm, dexvm, evm, graphvm, identityvm, keyvm, oraclevm, quantumvm, relayvm, mpcvm, zkvm). Per LP-186 §Per-VM wire packages, each schema's byte layout is the canonical fixed-section comment block in ~/work/lux/chains/<vm>/wire/<schema>.go. Each variable-length bytes-tail occupies an 8-byte slot in the fixed section (Off uint32 + Len uint32), per ZAP SetBytes layout (builder.go:208). Kinds declared in LP-186 spec but with no wire file in tree are deferred — see codegen/README.md §Deferred. Each VM's package namespace is <vm>wire to prevent Block/etc symbol clashes across the 12 VMs. Kind bytes are LOCAL to each VM's package (KindBlock=0x01 in aivmwire is distinct from KindBlock=0x01 in bridgevmwire) — skip_registry suppresses init() registration that would otherwise panic on duplicate kind bytes in the global zapv2.DefaultRegistry.",
   "skip_registry": true,
   "schemas": [
     {
@@ -684,8 +684,8 @@
       "go_name":   "ThresholdVMBlockSchema",
       "kind":      "0x01",
       "size":      96,
-      "package":   "thresholdvmwire",
-      "out":       "lp-186/thresholdvm/block_zap.go",
+      "package":   "mpcvmwire",
+      "out":       "lp-186/mpcvm/block_zap.go",
       "fields": [
         { "name": "BlockHeight",    "type": "uint64",  "offset": 8  },
         { "name": "BlockTimestamp", "type": "int64",   "offset": 16 },
@@ -700,8 +700,8 @@
       "go_name":   "OperationSchema",
       "kind":      "0x02",
       "size":      88,
-      "package":   "thresholdvmwire",
-      "out":       "lp-186/thresholdvm/operation_zap.go",
+      "package":   "mpcvmwire",
+      "out":       "lp-186/mpcvm/operation_zap.go",
       "fields": [
         { "name": "Timestamp",          "type": "int64",  "offset": 8  },
         { "name": "Success",            "type": "uint8",  "offset": 16 },
@@ -728,8 +728,8 @@
       "go_name":   "ManagedKeySchema",
       "kind":      "0x03",
       "size":      96,
-      "package":   "thresholdvmwire",
-      "out":       "lp-186/thresholdvm/managed_key_zap.go",
+      "package":   "mpcvmwire",
+      "out":       "lp-186/mpcvm/managed_key_zap.go",
       "fields": [
         { "name": "Threshold",          "type": "uint32", "offset": 4  },
         { "name": "TotalParties",       "type": "uint32", "offset": 8  },
@@ -756,8 +756,8 @@
       "go_name":   "CrossChainMPCRequestSchema",
       "kind":      "0x04",
       "size":      56,
-      "package":   "thresholdvmwire",
-      "out":       "lp-186/thresholdvm/cross_chain_request_zap.go",
+      "package":   "mpcvmwire",
+      "out":       "lp-186/mpcvm/cross_chain_request_zap.go",
       "fields": [
         { "name": "TypeOff",            "type": "uint32", "offset": 8  },
         { "name": "TypeLen",            "type": "uint32", "offset": 12 },
