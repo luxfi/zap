@@ -13,14 +13,13 @@ require (
 require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/luxfi/accel v1.1.9 // indirect
+	github.com/luxfi/accel v1.2.4 // indirect
 )
 
 require (
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/grandcat/zeroconf v1.0.0 // indirect
 	github.com/luxfi/crypto v1.20.2
-	github.com/luxfi/geth v1.20.1
 	github.com/miekg/dns v1.1.72 // indirect
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
