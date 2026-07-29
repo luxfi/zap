@@ -54,7 +54,7 @@ github.com/luxfi/mdns v0.1.1/go.mod h1:dbp5f3h3aE7CGzwbaWzBM9cwdcekhmSrWhQevgYhh
 github.com/luxfi/metric v1.8.1/go.mod h1:R1OPAIeW4UBW3osK7j2r3/XPmczfNRFTXg4bnlemTuE=
 github.com/luxfi/mock v0.1.1/go.mod h1:jo35akl3Vtd8LbzDts8VJ0jmSVycrd1/eBi6g6t5hKU=
 github.com/luxfi/p2p v1.22.1/go.mod h1:FHOSavVcq8JS1ZQtfddd9Jj1gaPstz1cjvNgczAQRyg=
-github.com/luxfi/pq v1.0.3 h1:pFlQm1+5FuKTDUh2y/23bXWkN4I2Rc5iuxJypwDFFMs=
+github.com/luxfi/pq v1.0.3 h1:ksw1dmfTR0dqqNMRS7BjGcprCO2Fhc+3Iiq2/NMuONw=
 github.com/luxfi/pq v1.0.3/go.mod h1:8bppZcRElfrVt0n3nYCZW3iX1TvhvzNbdjNdK1irgIE=
 github.com/luxfi/precompile v0.19.3/go.mod h1:c+dh+FWfpKr3FNfI4LhIdnn0naQmmS5Yz0KKTt4LknY=
 github.com/luxfi/runtime v1.3.1/go.mod h1:Tct998uUcmCQbUC1WLEeGLDH2IaVgMb+SkKcHKZpHV0=
