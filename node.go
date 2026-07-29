@@ -37,6 +37,7 @@ type Node struct {
 	discovery *mdns.Discovery
 
 	// Network
+	addr       string // listen address; "" = ":port"
 	listener   net.Listener
 	transports map[string]TransportConn // peerID -> transport conn (QUIC path)
 	transClose func() error             // closer for the QUIC listener
@@ -76,6 +77,15 @@ type NodeConfig struct {
 	NodeID      string
 	ServiceType string // e.g., "_luxd._tcp", "_fhed._tcp"
 	Port        int
+
+	// Address is where the node listens, and overrides Port when set. A
+	// filesystem path binds a unix socket; anything else is a host:port
+	// TCP address. Peers are dialled by the same rule (see Network), so a
+	// node can never listen on one transport and be dialled on another.
+	//
+	// A unix socket is unreachable off-host, so a node bound to one does
+	// not advertise itself over mDNS.
+	Address     string
 	Metadata    map[string]string
 	Logger      *slog.Logger
 	NoDiscovery bool        // Disable mDNS discovery (use ConnectDirect only)
@@ -104,6 +114,7 @@ func NewNode(cfg NodeConfig) *Node {
 		nodeID:      cfg.NodeID,
 		serviceType: cfg.ServiceType,
 		port:        cfg.Port,
+		addr:        cfg.Address,
 		noDiscovery: cfg.NoDiscovery,
 		tlsCfg:      cfg.TLS,
 		transport:   cfg.Transport,
@@ -122,8 +133,17 @@ func (n *Node) Start() error {
 	if n.transport == TransportQUIC {
 		return n.startQUIC()
 	}
-	// Start TCP listener
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", n.port))
+	// Start the listener. Network derives tcp or unix from the address, so
+	// this one line binds either.
+	addr := n.listenAddr()
+	if Network(addr) == "unix" {
+		// A socket file left by a previous process would make bind fail
+		// with EADDRINUSE even though nothing is listening.
+		if err := removeDeadSocket(addr); err != nil {
+			return err
+		}
+	}
+	ln, err := net.Listen(Network(addr), addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}
@@ -136,8 +156,9 @@ func (n *Node) Start() error {
 	n.wg.Add(1)
 	go n.acceptLoop()
 
-	// Start mDNS discovery (unless disabled)
-	if !n.noDiscovery {
+	// Start mDNS discovery (unless disabled). A unix socket cannot be
+	// reached by a peer that learns of it, so it is never advertised.
+	if !n.noDiscovery && Network(addr) != "unix" {
 		n.discovery = mdns.New(n.serviceType, n.nodeID, n.port,
 			mdns.WithLogger(n.logger),
 		)
@@ -162,10 +183,19 @@ func (n *Node) Start() error {
 	n.logger.Info("ZAP node started",
 		"nodeID", n.nodeID,
 		"service", n.serviceType,
-		"port", n.port,
+		"addr", ln.Addr().String(),
 	)
 
 	return nil
+}
+
+// listenAddr is where this node binds: the configured Address, or the
+// wildcard host on the configured Port.
+func (n *Node) listenAddr() string {
+	if n.addr != "" {
+		return n.addr
+	}
+	return fmt.Sprintf(":%d", n.port)
 }
 
 // Stop stops the node.
@@ -608,7 +638,7 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 
 	// Connect
 	addr := peer.Address()
-	netConn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	netConn, err := net.DialTimeout(Network(addr), addr, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
@@ -760,7 +790,7 @@ func (n *Node) ConnectDirectID(addr string) (string, error) {
 	if n.transport == TransportQUIC {
 		return "", n.quicConnectDirect(n.ctx, addr)
 	}
-	netConn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	netConn, err := net.DialTimeout(Network(addr), addr, 5*time.Second)
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
