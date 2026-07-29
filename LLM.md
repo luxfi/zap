@@ -36,6 +36,23 @@ zap/
 - `README.md` -- Project documentation
 - `go.mod` -- Go module definition
 
+## Listen address
+`NodeConfig.Address` is where a node listens, and overrides `Port` when
+set. `zap.Network(addr)` derives the transport from the address — a
+filesystem path (`/run/x.sock`, `./x.sock`, or Linux abstract `@x`) is a
+unix socket, anything else is a host:port TCP address. It is the one rule
+the listener and both dial paths use, so a node can never bind one
+transport and be dialled on another.
+
+```go
+n := zap.NewNode(zap.NodeConfig{NodeID: "a", Address: "/run/tasks.sock"})
+```
+
+A unix socket is unreachable off-host, so a node bound to one does not
+advertise itself over mDNS. Bind clears a socket file left behind by a
+process that did not unlink it, and refuses one another node is still
+serving.
+
 ## PQ-TLS Support
 Set `NodeConfig.TLS` to a `*tls.Config` to wrap all TCP connections
 (listener, getOrConnect, ConnectDirect) with TLS. Supports PQ-TLS 1.3
