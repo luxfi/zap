@@ -13,7 +13,7 @@ import (
 // harness_test.go provides the test scaffolding: an in-memory ZAP loopback (so the
 // suite needs no socket), and a faithful AtomicLedger that models the C<->D value
 // boundary EXACTLY as luxfi/precompile/dex/native_dchain_client.go and
-// luxfi/chains/dexvm/atomic.go enforce it. The AtomicLedger is the JUDGE in the
+// luxfi/dex/pkg/dchain/atomic.go enforce it. The AtomicLedger is the JUDGE in the
 // invariant tests: ZAP responses drive the client; only consuming a real atomic
 // object in the ledger moves a balance.
 

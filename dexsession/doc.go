@@ -22,7 +22,7 @@
 // # Why the invariant holds structurally, not just by policy
 //
 // The C-side value boundary (luxfi/precompile/dex/native_dchain_client.go) and
-// the D-side value boundary (luxfi/chains/dexvm/atomic.go) both operate on EVM
+// the D-side value boundary (luxfi/dex/pkg/dchain/atomic.go) both operate on EVM
 // host capabilities (a StateDB and an AtomicState / shared memory). This package
 // holds NONE of those: it has no StateDB, no AtomicState, no shared memory, and
 // — by deliberate module discipline — no compile-time edge to the precompile or
