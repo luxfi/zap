@@ -156,28 +156,10 @@ func (n *Node) Start() error {
 	n.wg.Add(1)
 	go n.acceptLoop()
 
-	// Start mDNS discovery (unless disabled). A unix socket cannot be
-	// reached by a peer that learns of it, so it is never advertised.
-	if !n.noDiscovery && Network(addr) != "unix" {
-		n.discovery = mdns.New(n.serviceType, n.nodeID, n.port,
-			mdns.WithLogger(n.logger),
-		)
-
-		n.discovery.OnPeer(n.handlePeerEvent)
-
-		// mDNS advertise/browse is BEST-EFFORT. It lets peers find each
-		// other zero-config on a LAN, but it is not required for service:
-		// the node is already accepting on its listener, and in-cluster
-		// peers reach it by address (Service DNS at the fixed port). On
-		// networks without multicast (most Kubernetes pod overlays,
-		// restricted hosts) discovery fails to start — the node MUST keep
-		// serving regardless. Log and continue rather than tearing down
-		// the listener.
-		if err := n.discovery.Start(); err != nil {
-			n.logger.Warn("ZAP mDNS discovery unavailable; serving without it (peers reach this node by address)",
-				"nodeID", n.nodeID, "service", n.serviceType, "err", err)
-			n.discovery = nil
-		}
+	// A unix socket cannot be reached by a peer that learns of it, so it is
+	// never advertised.
+	if Network(addr) != "unix" {
+		n.startDiscovery()
 	}
 
 	n.logger.Info("ZAP node started",
@@ -189,6 +171,33 @@ func (n *Node) Start() error {
 	return nil
 }
 
+// startDiscovery brings up mDNS advertise/browse for this node.
+//
+// It is BEST-EFFORT. It lets peers find each other zero-config on a LAN, but
+// it is not required for service: the node is already accepting on its
+// listener, and in-cluster peers reach it by address (Service DNS at the fixed
+// port). On networks without multicast (most Kubernetes pod overlays,
+// restricted hosts) discovery fails to start — the node MUST keep serving
+// regardless. Log and continue rather than tearing down the listener.
+//
+// n.discovery is set only once discovery is actually running, so a Stop that
+// follows a failed Start has nothing to take down.
+func (n *Node) startDiscovery() {
+	if n.noDiscovery {
+		return
+	}
+
+	d := mdns.New(n.serviceType, n.nodeID, n.port, mdns.WithLogger(n.logger))
+	d.OnPeer(n.handlePeerEvent)
+
+	if err := d.Start(); err != nil {
+		n.logger.Warn("ZAP mDNS discovery unavailable; serving without it (peers reach this node by address)",
+			"nodeID", n.nodeID, "service", n.serviceType, "err", err)
+		return
+	}
+	n.discovery = d
+}
+
 // listenAddr is where this node binds: the configured Address, or the
 // wildcard host on the configured Port.
 func (n *Node) listenAddr() string {
@@ -198,13 +207,25 @@ func (n *Node) listenAddr() string {
 	return fmt.Sprintf(":%d", n.port)
 }
 
-// Stop stops the node.
+// waitBound caps how long Stop waits on the goroutines it started.
+//
+// Closing the listener and every connection is what actually releases them,
+// and it releases them at once, so the bound is a backstop rather than a
+// schedule. It exists because two of those goroutines run code this package
+// does not own: dispatchLoop calls a registered Handler inline, and a
+// connection still shaking hands is not yet in the conns map, so Stop cannot
+// close it and it sits on its own read deadline. Neither a peer nor a handler
+// gets to decide when this process exits.
+const waitBound = time.Second
+
+// Stop stops the node. It is safe on a node that never started: Start unwinds
+// what it brought up, so Stop finds nothing to take down.
+//
+// Order matters. acceptLoop wakes only when the listener closes, so anything
+// that runs ahead of that close and blocks -- discovery used to -- pins
+// acceptLoop for the whole time and then Wait waits for it.
 func (n *Node) Stop() {
 	n.cancel()
-
-	if n.discovery != nil {
-		n.discovery.Stop()
-	}
 
 	if n.listener != nil {
 		n.listener.Close()
@@ -213,7 +234,6 @@ func (n *Node) Stop() {
 		_ = n.transClose()
 	}
 
-	// Close all connections
 	n.connsMu.Lock()
 	for _, conn := range n.conns {
 		conn.conn.Close()
@@ -225,8 +245,23 @@ func (n *Node) Stop() {
 	n.transports = make(map[string]TransportConn)
 	n.connsMu.Unlock()
 
-	n.wg.Wait()
-	n.logger.Info("ZAP node stopped", "nodeID", n.nodeID)
+	if n.discovery != nil {
+		n.discovery.Stop()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		n.wg.Wait()
+	}()
+
+	select {
+	case <-done:
+		n.logger.Info("ZAP node stopped", "nodeID", n.nodeID)
+	case <-time.After(waitBound):
+		n.logger.Warn("ZAP node stopped with work still running",
+			"nodeID", n.nodeID, "after", waitBound)
+	}
 }
 
 // Handle registers a handler for a message type.
