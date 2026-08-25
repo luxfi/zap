@@ -43,16 +43,7 @@ func (n *Node) startQUIC() error {
 		}
 	}
 
-	if !n.noDiscovery {
-		n.discovery = mdns.New(n.serviceType, n.nodeID, n.port,
-			mdns.WithLogger(n.logger),
-		)
-		n.discovery.OnPeer(n.handlePeerEvent)
-		if err := n.discovery.Start(); err != nil {
-			_ = n.transClose()
-			return fmt.Errorf("zap: start discovery: %w", err)
-		}
-	}
+	n.startDiscovery()
 
 	n.logger.Info("ZAP node started (QUIC)",
 		"nodeID", n.nodeID,
