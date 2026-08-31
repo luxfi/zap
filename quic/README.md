@@ -1,8 +1,8 @@
 # zap/quic — QUIC transport for ZAP
 
 `github.com/luxfi/zap/quic` is the canonical QUIC transport for the ZAP
-messaging substrate (KMS, MPC, IAM, arcd, every Hanzo / Lux service that
-embeds ZAP).
+messaging substrate (KMS, MPC, IAM, every Hanzo / Lux service that embeds
+ZAP).
 
 It wraps `github.com/quic-go/quic-go` and exposes:
 
