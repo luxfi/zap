@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/coder/websocket v1.8.12
 	github.com/luxfi/mdns v0.2.1
-	github.com/luxfi/pq v1.0.3
+	github.com/luxfi/pq v1.1.2
 	github.com/quic-go/quic-go v0.59.1
 	golang.org/x/crypto v0.52.0
 )
