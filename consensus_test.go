@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -181,12 +182,16 @@ func TestFiveNodeConsensus(t *testing.T) {
 		Level: slog.LevelInfo,
 	}))
 
-	// Create 5 nodes with mDNS disabled (use ConnectDirect only for reliable testing)
+	// Create 5 nodes with mDNS disabled (use ConnectDirect only for reliable testing).
+	// Ports come from the OS: a fixed base collides with whatever else on the
+	// machine happens to hold it, and this test then fails for a reason that has
+	// nothing to do with consensus.
 	nodes := make([]*ConsensusNode, 5)
-	basePort := 19000
+	ports := make([]int, 5)
 
 	for i := 0; i < 5; i++ {
-		nodes[i] = newConsensusNode(i, basePort+i, logger, true)
+		ports[i] = freeTCPPort(t)
+		nodes[i] = newConsensusNode(i, ports[i], logger, true)
 	}
 
 	// Start all nodes
@@ -204,7 +209,7 @@ func TestFiveNodeConsensus(t *testing.T) {
 	t.Log("Connecting nodes...")
 	for i := 0; i < 5; i++ {
 		for j := i + 1; j < 5; j++ {
-			addr := fmt.Sprintf("127.0.0.1:%d", basePort+j)
+			addr := fmt.Sprintf("127.0.0.1:%d", ports[j])
 			if err := nodes[i].ConnectDirect(addr); err != nil {
 				t.Logf("Warning: node %d failed to connect to node %d: %v", i, j, err)
 			}
@@ -317,4 +322,20 @@ func BenchmarkConsensusRound(b *testing.B) {
 		_ = voteRoot.Uint32(FieldNodeID)
 		_ = voteRoot.Uint32(FieldVoteFor)
 	}
+}
+
+// freeTCPPort asks the OS for a port nobody is using. Binding a fixed one makes
+// a test fail whenever anything else on the machine already holds it, which is
+// a failure about the machine wearing the name of a failure about the code.
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve a port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("release the reserved port: %v", err)
+	}
+	return port
 }
