@@ -79,3 +79,8 @@ node_modules/
 /zap-wasm/
 /zap-wireshark/
 /zerocopy/
+
+# Local symlinks to LLM.md
+CLAUDE.md
+AGENTS.md
+GEMINI.md
