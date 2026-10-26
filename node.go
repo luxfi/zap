@@ -264,6 +264,13 @@ func (n *Node) Stop() {
 	}
 }
 
+// closeOnStop closes the connection when the node stops, which is what
+// ends a read blocked on an idle peer: the read loops set no deadline.
+// The returned func withdraws the close; the read loop defers it.
+func (n *Node) closeOnStop(netConn net.Conn) func() bool {
+	return context.AfterFunc(n.ctx, func() { _ = netConn.Close() })
+}
+
 // Handle registers a handler for a message type.
 func (n *Node) Handle(msgType uint16, handler Handler) {
 	n.handlersMu.Lock()
@@ -424,6 +431,9 @@ func (n *Node) handleConn(netConn net.Conn) {
 		n.logger.Debug("Handshake read error", "error", err)
 		return
 	}
+	// The deadline bounds the handshake alone; every frame after it is
+	// read whole (dispatchLoop).
+	netConn.SetReadDeadline(time.Time{})
 	peerID, _ := DecodeNodeIDHandshake(data)
 
 	// Check for duplicate BEFORE sending handshake response
@@ -481,9 +491,16 @@ func (n *Node) handleConn(netConn net.Conn) {
 //   - Call responses → conn.pending channel for the awaiting goroutine
 //   - Uncorrelated messages → handler → optional response
 //
-// Returns when the underlying conn errors (non-timeout) or ctx is
-// cancelled. The caller is responsible for the per-connection
-// cleanup (conns-map delete, log).
+// Returns when the underlying conn errors or ctx is cancelled. The
+// caller is responsible for the per-connection cleanup (conns-map
+// delete, log).
+//
+// A frame is read whole: no deadline cuts it. A unix socket writes a
+// frame's length and body as two writes, so a writer descheduled
+// between them splits the frame, and a deadline in that gap would end
+// the read with the length consumed: the next read would begin inside
+// the body and take its bytes for a length, misreading every frame
+// after it. Shutdown closes the connection (closeOnStop) instead.
 //
 // Buffer lifecycle (post pool-aware read path):
 //   - Each iteration pulls one frame into a pooled *bufRef. The frame
@@ -498,6 +515,7 @@ func (n *Node) handleConn(netConn net.Conn) {
 // The result is two allocations saved per dispatch: the body slab and
 // the bufRef header (both pooled).
 func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
+	defer n.closeOnStop(netConn)()
 	for {
 		select {
 		case <-n.ctx.Done():
@@ -505,16 +523,11 @@ func (n *Node) dispatchLoop(netConn net.Conn, conn *Conn, peerID string) {
 		default:
 		}
 
-		netConn.SetReadDeadline(time.Now().Add(1 * time.Second))
 		ref, err := readMessageRawPooled(netConn)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return
+			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+				n.logger.Debug("Read error", "peerID", peerID, "error", err)
 			}
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
-			n.logger.Debug("Read error", "peerID", peerID, "error", err)
 			return
 		}
 		data := ref.Bytes()
@@ -722,6 +735,7 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
+		defer netConn.Close()
 		defer func() {
 			n.connsMu.Lock()
 			// Only delete if this is still our connection
@@ -731,6 +745,7 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 			n.connsMu.Unlock()
 		}()
 
+		defer n.closeOnStop(netConn)()
 		for {
 			select {
 			case <-n.ctx.Done():
@@ -738,16 +753,12 @@ func (n *Node) getOrConnect(peerID string) (*Conn, error) {
 			default:
 			}
 
-			// Set read deadline so we can check for context cancellation.
-			// Buffer lifecycle mirrors dispatchLoop: response frames hand
-			// off the slab to the awaiting Call goroutine via Retain;
-			// everything else releases at end of iteration.
-			netConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+			// A frame is read whole, as in dispatchLoop. Buffer lifecycle
+			// mirrors it too: response frames hand off the slab to the
+			// awaiting Call goroutine via Retain; everything else releases
+			// at end of iteration.
 			ref, err := readMessageRawPooled(netConn)
 			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
 				return
 			}
 			data := ref.Bytes()
@@ -876,6 +887,7 @@ func (n *Node) ConnectDirectID(addr string) (string, error) {
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
+		defer netConn.Close()
 		defer func() {
 			n.connsMu.Lock()
 			if cur, ok := n.conns[peerID]; ok && cur == conn {
